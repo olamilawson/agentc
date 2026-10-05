@@ -1,0 +1,10 @@
+{
+	# Single entry point; automatic HTTPS for the agent's domain.
+	email {$AGENT_ADMIN_EMAIL}
+}
+
+{$AGENT_DOMAIN} {
+	# Foundation: the queue page is the only UI. Single-owner login gains
+	# two-factor before any client material loads (see deploy/hardening.md).
+	reverse_proxy api:8000
+}

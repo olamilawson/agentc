@@ -1,0 +1,13 @@
+# Model route table — tiers map to providers; changing a model never changes code.
+# Placeholder model ids: confirm current versions and terms per provider before
+# connecting it (PRD: model routing and cost). The fallback is used only on
+# provider error, and the run record shows when it did.
+cheap:
+  primary: openai/gpt-5-mini
+  fallback: anthropic/claude-haiku-4-5
+standard:
+  primary: openai/gpt-5
+  fallback: anthropic/claude-sonnet-4-5
+strong:
+  primary: anthropic/claude-opus-4-5
+  fallback: openai/gpt-5

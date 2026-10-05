@@ -1,0 +1,53 @@
+# Foundation deployment on the Hostinger VPS (KVM 2).
+# n8n already runs on this host and stays as-is; it keeps only the mailbox watcher.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: personal_agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env on the server}
+      POSTGRES_DB: personal_agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [internal]   # never published to the host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U personal_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      PERSONAL_AGENT_DATABASE_URL: postgresql+psycopg://personal_agent:${POSTGRES_PASSWORD}@postgres:5432/personal_agent
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    # Not published: Caddy is the single entry point.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      AGENT_DOMAIN: ${AGENT_DOMAIN:?set in .env on the server}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

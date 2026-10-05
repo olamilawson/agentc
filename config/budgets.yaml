@@ -1,0 +1,6 @@
+# Per-run ceilings (PRD: budgets and failure). Hitting any ceiling stops the run
+# with a clear reason and keeps the partial work.
+max_total_tokens: 200000
+max_tool_calls: 20
+max_cost_usd: 5.0
+max_elapsed_seconds: 600
