@@ -41,6 +41,7 @@ def settings(tmp_path) -> Settings:
         },
         budgets=Budgets(max_total_tokens=100_000, max_tool_calls=10, max_cost_usd=5.0),
         skills_dir=skills_dir,
+        clients_dir=tmp_path / "clients",
     )
 
 

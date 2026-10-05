@@ -75,7 +75,27 @@ class ToolGateway:
             self.db.audit(run_id, "tool_refused", {"node": node, "tool": name})
             raise ToolRefused(f"tool '{name}' is not on node '{node}' allowlist")
 
-        spec = self._tools[name]
+        spec = self._tools.get(name)
+        if spec is None:
+            self.db.record_tool_call(run_id, node, name, "unknown", content_hash(payload),
+                                     None, "refused", {"reason": "tool not registered"})
+            raise ToolRefused(f"tool '{name}' is not registered")
+
+        # Client separation is checked in code: a tool payload naming another
+        # client than the run's immutable scope is refused and audited.
+        run = self.db.get_run(run_id)
+        if run and isinstance(payload, dict) and payload.get("client") not in (None, run["client"]):
+            self.db.record_tool_call(run_id, node, name, spec.cls.value, content_hash(payload),
+                                     None, "refused",
+                                     {"reason": f"cross-client access: run client is {run['client']!r}"})
+            self.db.audit(run_id, "cross_client_refused", {
+                "node": node, "tool": name,
+                "attempted": payload.get("client"), "run_client": run["client"],
+            })
+            raise ToolRefused(
+                f"tool '{name}' attempted to access client {payload['client']!r} "
+                f"but the run scope is {run['client']!r}"
+            )
         p_hash = content_hash(payload)
 
         if spec.cls is ToolClass.RELEASE:

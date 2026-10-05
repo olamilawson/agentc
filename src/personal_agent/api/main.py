@@ -29,6 +29,10 @@ class ApprovalDecision(BaseModel):
     comment: str | None = Field(default=None, max_length=4000)
 
 
+class ClientCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
 def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None) -> FastAPI:
     settings = settings or load_settings()
     db = Database(settings.database_url)
@@ -39,6 +43,46 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     @app.get("/health")
     def health() -> dict:
         return {"ok": True}
+
+    @app.post("/clients", status_code=201)
+    def create_client(body: ClientCreate) -> dict:
+        try:
+            scope = engine.harness.clients.ensure(body.name)
+        except Exception as e:  # invalid name
+            raise HTTPException(400, str(e))
+        db.audit(None, "client_created", {"client": scope.name})
+        return {"client": scope.name}
+
+    @app.get("/clients")
+    def list_clients() -> list[str]:
+        return engine.harness.clients.list_clients()
+
+    @app.get("/clients/{name}/files")
+    def list_files(name: str) -> list[dict]:
+        try:
+            scope = engine.harness.clients.scope(name)
+        except KeyError:
+            raise HTTPException(404, f"unknown client {name!r}")
+        return engine.harness.clients.list_files(scope)
+
+    @app.post("/clients/{name}/files", status_code=201)
+    async def upload_file(name: str, request: Request) -> dict:
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            raise HTTPException(400, "multipart field 'file' is required")
+        try:
+            scope = engine.harness.clients.scope(name)
+        except KeyError:
+            raise HTTPException(404, f"unknown client {name!r}")
+        data = await upload.read()
+        if len(data) > 20 * 1024 * 1024:
+            raise HTTPException(413, "file exceeds 20 MB intake limit")
+        try:
+            stored = engine.harness.clients.store_file(scope, upload.filename or "unnamed", data)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+        return {"client": scope.name, "file": stored, "bytes": len(data)}
 
     @app.post("/runs", status_code=201)
     def create_run(body: RunCreate) -> dict:

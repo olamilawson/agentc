@@ -34,6 +34,7 @@ class Settings(BaseModel):
     route_table: dict[str, TierRoute]
     budgets: Budgets
     skills_dir: Path
+    clients_dir: Path
 
 
 def load_settings() -> Settings:
@@ -59,4 +60,7 @@ def load_settings() -> Settings:
         route_table=routes,
         budgets=budgets,
         skills_dir=REPO_ROOT / "skills",
+        clients_dir=Path(
+            os.environ.get("PERSONAL_AGENT_CLIENTS_DIR", str(REPO_ROOT / "data" / "clients"))
+        ),
     )

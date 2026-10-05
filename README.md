@@ -27,6 +27,10 @@ this repository implements **Delivery phase 1: Foundation**.
   Graph send tool.
 - **Skill library** — versioned `skills/*/SKILL.md` files; every run records
   the library version it used; the agent never edits them.
+- **Client folders** — one directory per client; runs carry an immutable client
+  scope; file intake (`POST /clients/{name}/files`), PDF/Word/text parsing and
+  keyword retrieval are read-class tools whose payloads are checked against the
+  run's scope in code, so separation never relies on an instruction.
 - **Evaluation scaffold** — `evaluation/sets/` (owner-scored items; injection
   and client-separation safety sets come before the first live workflow).
 

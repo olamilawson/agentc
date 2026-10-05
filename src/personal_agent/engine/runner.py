@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
+from personal_agent.clients import ClientScope, ClientStore, parse_document
 from personal_agent.config import Settings
 from personal_agent.db import Database, new_id
 from personal_agent.engine.graph import ROLE, DraftIn, DraftOut, build_test_graph
@@ -34,9 +35,11 @@ class Harness:
     contracts: dict[str, StepContract]
     skill_text: str
     tools: ToolGateway = field(init=False)
+    clients: ClientStore = field(init=False)
 
     def __post_init__(self):
         self.tools = ToolGateway(self.db)
+        self.clients = ClientStore(self.settings.clients_dir, self.db)
         # Foundation stub for a release tool; the real Microsoft Graph send tool
         # joins with the same class and approval semantics in the sponsorship phase.
         self.tools.register(
@@ -46,6 +49,32 @@ class Harness:
                 fn=lambda payload: {"sent": True, "subject": payload["subject"]},
             )
         )
+        # Read-class client tools. Every payload names its client; the gateway
+        # refuses any payload whose client differs from the run's scope.
+        self.tools.register(
+            ToolSpec(
+                name="read_client_file",
+                cls=ToolClass.READ,
+                fn=lambda payload: self._read_client_file(payload),
+            )
+        )
+        self.tools.register(
+            ToolSpec(
+                name="search_client_files",
+                cls=ToolClass.READ,
+                fn=lambda payload: {
+                    "client": payload["client"],
+                    "hits": self.clients.search(ClientScope(payload["client"]), payload["query"]),
+                },
+            )
+        )
+
+    def _read_client_file(self, payload: dict) -> dict:
+        scope = ClientScope(payload["client"])
+        raw = self.clients.read_bytes(scope, payload["path"])
+        parsed = parse_document(raw, payload["path"])
+        text = parsed.pop("text")
+        return {**parsed, "path": payload["path"], "text": text[:8000], "truncated": len(text) > 8000}
 
     def node_runner(self, tracker: BudgetTracker) -> NodeRunner:
         return NodeRunner(self.gateway, tracker)
@@ -94,6 +123,8 @@ class Engine:
     # --- lifecycle -----------------------------------------------------------
     def start_run(self, workflow: str, client: str, inputs: dict) -> str:
         run_id = new_id()
+        scope = self.harness.clients.ensure(client)  # one client scope, set here, never changed
+        client = scope.name
         version, _ = load_library(self.settings.skills_dir)
         self.db.create_run(run_id, workflow, client, inputs, version)
         self.db.audit(run_id, "run_created", {"workflow": workflow, "client": client})
