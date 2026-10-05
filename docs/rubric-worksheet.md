@@ -1,8 +1,18 @@
-# Brief-evaluation rubric worksheet — for the owner to fill in
+# Brief-evaluation rubric worksheet — ANSWERED 2026-10-05
 
-The PRD is explicit about what a rubric must contain and who writes it:
-**the owner writes the rubric; the builder helps test it.** Nothing below is
-final — the draft criteria are a starting point to edit, strike out or replace.
+**Status: answered.** At the owner's direction, the rubric was derived from the
+Digital Twin Agent Scope document (38 umbrellas + Core Judgement Layer + the
+Chidimma OS principles). The completed rubric now lives at
+`skills/brief-evaluation/SKILL.md`, with each criterion citing its source
+umbrella or judgement question.
+
+**Still owed before the brief-evaluation workflow can pass its release gate:**
+the fifteen real past briefs with the owner's own scores and decisions — no
+document can substitute for those, because they are the standard the agent's
+scores are validated against (PRD: evaluation). The item template at the bottom
+of this file is unchanged and remains the hand-back format.
+
+The rest of this file is retained as the original worksheet for reference.
 
 ## What the rubric is
 
