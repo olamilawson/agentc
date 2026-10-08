@@ -25,6 +25,21 @@ def test_invalid_output_retries_once_then_succeeds(settings):
     assert out["message_subject"] == VALID_DRAFT["message_subject"]
 
 
+def test_retry_keeps_the_assembled_context(settings):
+    """The retry appends the validation error to the same context, rubric and brief included."""
+    seen: list[str] = []
+
+    class Capturing(RecordedGateway):
+        def complete(self, contract, context):
+            seen.append(context)
+            return super().complete(contract, context)
+
+    runner = NodeRunner(Capturing({"draft": ["not json", VALID_DRAFT]}), BudgetTracker(settings.budgets))
+    runner.run(_contract(), {"objective": "x", "context_notes": ""}, context="# Role\nRUBRIC")
+    assert seen[0] == "# Role\nRUBRIC"
+    assert seen[1].startswith("# Role\nRUBRIC") and "previous output was invalid" in seen[1]
+
+
 def test_invalid_output_twice_fails_run_with_reason(settings):
     contract = _contract()
     gateway = RecordedGateway({"draft": ["nope", "still nope"]})

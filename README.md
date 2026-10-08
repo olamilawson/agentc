@@ -25,6 +25,12 @@ this repository implements **Delivery phase 1: Foundation**.
 - **Test graph** — intake → draft (model, standard tier) → owner approval
   (interrupt) → release. The release tool is a stub for the future Microsoft
   Graph send tool.
+- **Brief evaluation graph** — receive brief → extract fields (cheap) → check
+  gaps (code) → score by rubric (strong) → draft assessment (standard) → verify
+  evidence (string match, then a model check; returns to scoring twice at most)
+  → owner approval → file the assessment to the client folder. Built and tested
+  against recorded responses; not yet run against a live provider or the
+  owner-scored gate set.
 - **Skill library** — versioned `skills/*/SKILL.md` files; every run records
   the library version it used; the agent never edits them.
 - **Client folders** — one directory per client; runs carry an immutable client
@@ -59,6 +65,15 @@ open http://localhost:8000/queue      # approve it there, or:
 curl -s localhost:8000/runs/<run_id>/approval -X POST -H 'content-type: application/json' -d '{"decision":"approved"}'
 ```
 
+Evaluate a brief (a file already uploaded to the client folder, or pasted text):
+
+```bash
+curl -s localhost:8000/clients/demo/files -F file=@brief.pdf
+curl -s localhost:8000/runs -X POST -H 'content-type: application/json' \
+  -d '{"workflow":"brief-evaluation","client":"demo","inputs":{"brief_path":"brief.pdf"}}'
+# or: "inputs":{"brief_text":"..."}
+```
+
 With no provider keys configured the model call will fail honestly — runs that
 need a model stop with a clear reason. Tests never call a provider.
 
@@ -72,8 +87,9 @@ restore drill, and one secret per provider in the server environment.
 
 ## Next phases (PRD delivery order)
 
-1. Brief evaluation workflow + its evaluation set and safety sets (gate: both
-   sets pass on the owner's real briefs).
+1. Brief evaluation: the graph exists; still owed are the owner-scored
+   evaluation set, the injection and separation safety sets, and a live run
+   measuring agreement (gate: both sets pass on the owner's real briefs).
 2. Sponsorship triage: Microsoft Graph via n8n watcher, ledger, Outlook drafts,
    sends under approval.
 3. Creative review and drafting: page rendering, image scoring, critique loop.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from typing import Callable
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -16,6 +17,7 @@ from langgraph.types import Command
 from personal_agent.clients import ClientScope, ClientStore, parse_document
 from personal_agent.config import Settings
 from personal_agent.db import Database, new_id
+from personal_agent.engine.brief_evaluation import brief_contracts, brief_outputs, build_brief_graph
 from personal_agent.engine.graph import ROLE, DraftIn, DraftOut, build_test_graph
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
@@ -34,6 +36,7 @@ class Harness:
     gateway: ModelGateway
     contracts: dict[str, StepContract]
     skill_text: str
+    skills: dict[str, str] = field(default_factory=dict)
     tools: ToolGateway = field(init=False)
     clients: ClientStore = field(init=False)
 
@@ -65,6 +68,19 @@ class Harness:
                 fn=lambda payload: {
                     "client": payload["client"],
                     "hits": self.clients.search(ClientScope(payload["client"]), payload["query"]),
+                },
+            )
+        )
+        # Draft-class: a document in the run's own client folder (reversible).
+        self.tools.register(
+            ToolSpec(
+                name="write_client_file",
+                cls=ToolClass.DRAFT,
+                fn=lambda payload: {
+                    "client": payload["client"],
+                    "file": self.clients.store_file(
+                        ClientScope(payload["client"]), payload["filename"], payload["text"].encode("utf-8")
+                    ),
                 },
             )
         )
@@ -104,6 +120,33 @@ def default_contracts() -> dict[str, StepContract]:
     }
 
 
+def _test_outputs(state: dict) -> dict | None:
+    if not state.get("draft_subject"):
+        return None
+    return {
+        "subject": state.get("draft_subject"),
+        "body": state.get("draft_body"),
+        "questions": state.get("questions", []),
+        "released": state.get("released"),
+    }
+
+
+@dataclass(frozen=True)
+class Workflow:
+    build: Callable  # (Harness) -> StateGraph
+    outputs: Callable[[dict], dict | None]  # graph state -> the run record's outputs
+
+
+WORKFLOWS: dict[str, Workflow] = {
+    "foundation-test": Workflow(build_test_graph, _test_outputs),
+    "brief-evaluation": Workflow(build_brief_graph, brief_outputs),
+}
+
+
+class UnknownWorkflow(ValueError):
+    pass
+
+
 class Engine:
     def __init__(self, settings: Settings, db: Database, gateway: ModelGateway | None = None):
         self.settings = settings
@@ -113,15 +156,27 @@ class Engine:
             settings=settings,
             db=db,
             gateway=gateway or ModelGateway(settings.route_table),
-            contracts=default_contracts(),
+            contracts={**default_contracts(), **brief_contracts()},
             skill_text=skills.get("foundation-test", ""),
+            skills=skills,
         )
         conn = sqlite3.connect(settings.checkpoint_path, check_same_thread=False)
         self.checkpointer = SqliteSaver(conn)
-        self.graph = build_test_graph(self.harness).compile(checkpointer=self.checkpointer)
+        self.graphs = {
+            name: wf.build(self.harness).compile(checkpointer=self.checkpointer)
+            for name, wf in WORKFLOWS.items()
+        }
+
+    def _graph(self, run_id: str):
+        run = self.db.get_run(run_id)
+        if not run or run["workflow"] not in self.graphs:
+            raise UnknownWorkflow(f"run {run_id} has no known workflow")
+        return self.graphs[run["workflow"]]
 
     # --- lifecycle -----------------------------------------------------------
     def start_run(self, workflow: str, client: str, inputs: dict) -> str:
+        if workflow not in WORKFLOWS:
+            raise UnknownWorkflow(f"unknown workflow {workflow!r}; known: {', '.join(WORKFLOWS)}")
         run_id = new_id()
         scope = self.harness.clients.ensure(client)  # one client scope, set here, never changed
         client = scope.name
@@ -152,7 +207,7 @@ class Engine:
 
     # --- inspection ------------------------------------------------------------
     def pending_approval(self, run_id: str) -> dict:
-        snap = self.graph.get_state({"configurable": {"thread_id": run_id}})
+        snap = self._graph(run_id).get_state({"configurable": {"thread_id": run_id}})
         for task in snap.tasks:
             for intr in task.interrupts or ():
                 value = intr.value
@@ -182,12 +237,13 @@ class Engine:
     # --- internals ---------------------------------------------------------------
     def _invoke(self, run_id: str, command, start_state: dict | None) -> None:
         config = {"configurable": {"thread_id": run_id}}
+        graph = self._graph(run_id)
         self.db.update_run(run_id, status="running")
         try:
             if command is not None:
-                self.graph.invoke(command, config=config)
+                graph.invoke(command, config=config)
             else:
-                self.graph.invoke(start_state, config=config)
+                graph.invoke(start_state, config=config)
         except (StepFailed, BudgetExceeded) as e:
             self._sync(run_id, status_override="failed", error_reason=str(e))
             return
@@ -197,8 +253,9 @@ class Engine:
         self._sync(run_id)
 
     def _sync(self, run_id: str, status_override: str | None = None, error_reason: str | None = None) -> None:
-        snap = self.graph.get_state({"configurable": {"thread_id": run_id}})
+        snap = self._graph(run_id).get_state({"configurable": {"thread_id": run_id}})
         state = snap.values or {}
+        workflow = WORKFLOWS[self.db.get_run(run_id)["workflow"]]
         usage = state.get("usage") or {}
         flags = state.get("flags", [])
 
@@ -215,16 +272,7 @@ class Engine:
             run_id,
             status=status,
             error_reason=reason,
-            outputs=(
-                {
-                    "subject": state.get("draft_subject"),
-                    "body": state.get("draft_body"),
-                    "questions": state.get("questions", []),
-                    "released": state.get("released"),
-                }
-                if state.get("draft_subject")
-                else None
-            ),
+            outputs=workflow.outputs(state),
             tokens_in=usage.get("tokens_in", 0),
             tokens_out=usage.get("tokens_out", 0),
             cost_usd=usage.get("cost_usd", 0.0),

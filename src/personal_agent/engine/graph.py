@@ -17,10 +17,10 @@ from typing import Annotated, TypedDict
 
 import operator
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
-from personal_agent.gateway.tools import ApprovalLapsed, ApprovalRequired, content_hash
+from personal_agent.engine.approval import make_approval_node
+from personal_agent.gateway.tools import ApprovalLapsed, ApprovalRequired
 from personal_agent.harness.budgets import BudgetTracker
 from personal_agent.harness.context import build_context
 
@@ -53,6 +53,7 @@ class TestGraphState(TypedDict, total=False):
     questions: list[str]
     approval_error: str | None
     approved_hash: str
+    fallback_used: bool
     released: dict
     error: str | None
 
@@ -74,7 +75,7 @@ def build_test_graph(h):
         tracker = BudgetTracker(h.settings.budgets)
         prior = state.get("usage") or {}
         tracker.add_usage(prior.get("tokens_in", 0), prior.get("tokens_out", 0), prior.get("cost_usd", 0.0))
-        _, context = build_context(
+        context, _ = build_context(
             ROLE,
             h.skill_text,
             [],
@@ -101,37 +102,10 @@ def build_test_graph(h):
             "fallback_used": getattr(h.gateway, "used_fallback", False),
         }
 
-    def approval(state: TestGraphState) -> dict:
-        # The owner's approval is the only step that releases a reply.
-        # One interrupt per node execution; a mismatched or lapsed approval
-        # routes back into this node (a fresh interrupt) so the owner can
-        # approve again — the graph loop is bounded by human decisions.
-        payload = {"subject": state["draft_subject"], "body": state["draft_body"]}
-        p_hash = content_hash(payload)
-        resume = interrupt(
-            {
-                "type": "approval",
-                "content": payload,
-                "content_hash": p_hash,
-                "error": state.get("approval_error"),
-            }
-        )
-        rec = db.get_approval(resume["approval_id"])
-        if (
-            rec
-            and rec["decision"] == "approved"
-            and not rec["lapsed"]
-            and rec["content_hash"] == p_hash
-        ):
-            return {"approval_error": None, "approved_hash": p_hash}
-        if rec and rec["content_hash"] != p_hash:
-            # Content changed after approval: the approval lapses.
-            db.lapse_approval(rec["id"])
-            db.audit(state["run_id"], "approval_lapsed", {
-                "approval_id": rec["id"],
-                "note": "content no longer matches the approved hash; owner must approve again",
-            })
-        return {"approval_error": "approval does not match the current content; approve again"}
+    # The owner's approval is the only step that releases a reply.
+    approval = make_approval_node(
+        db, lambda state: {"subject": state["draft_subject"], "body": state["draft_body"]}
+    )
 
     def after_approval(state: TestGraphState) -> str:
         return "approval" if state.get("approval_error") else "release"

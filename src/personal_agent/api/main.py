@@ -8,13 +8,15 @@ content by hash. Minimal server-rendered UI for now; the full interface
 
 from __future__ import annotations
 
+from html import escape
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
-from personal_agent.engine.runner import Engine
+from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.harness.models import ModelGateway
 
 
@@ -86,7 +88,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 
     @app.post("/runs", status_code=201)
     def create_run(body: RunCreate) -> dict:
-        run_id = engine.start_run(body.workflow, body.client, body.inputs)
+        try:
+            run_id = engine.start_run(body.workflow, body.client, body.inputs)
+        except UnknownWorkflow as e:
+            raise HTTPException(400, str(e))
         return {"run_id": run_id, "run": db.get_run(run_id)}
 
     @app.get("/runs")
@@ -127,16 +132,17 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         rows = []
         for item in engine.queue():
             error = (
-                f'<div class="error">{item["error"]}</div>' if item.get("error") else ""
+                f'<div class="error">{escape(item["error"])}</div>' if item.get("error") else ""
             )
+            # Drafted content derives from untrusted material: always escaped.
             content = item["content"]
             rows.append(
                 f"""
                 <section class="card">
-                  <h2>{content.get("subject", "")}</h2>
-                  <p class="meta">run {item["run_id"]} · {item["workflow"]} · client {item["client"]}</p>
+                  <h2>{escape(content.get("subject", ""))}</h2>
+                  <p class="meta">run {item["run_id"]} · {escape(item["workflow"])} · client {escape(item["client"])}</p>
                   {error}
-                  <pre>{content.get("body", "")}</pre>
+                  <pre>{escape(content.get("body", ""))}</pre>
                   <p class="meta">content hash: <code>{item["content_hash"]}</code></p>
                   <div class="actions">
                     <form method="post" action="/runs/{item["run_id"]}/approval">

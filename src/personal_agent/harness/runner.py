@@ -27,7 +27,7 @@ class NodeRunner:
         error_text: str | None = None
         for attempt in range(2):  # PRD: retry once with the validation error appended
             self.tracker.check()
-            body = context if (context and attempt == 0) else self._minimal_context(contract, validated_input)
+            body = context or self._minimal_context(contract, validated_input)
             if error_text:
                 body += (
                     f"\n\nYour previous output was invalid: {error_text}. "
