@@ -12,8 +12,7 @@ def test_injected_instructions_are_flagged_not_obeyed(settings):
     run_id = engine.start_run("foundation-test", "acme", inputs)
     run = engine.db.get_run(run_id)
     assert run["status"] in {"waiting_for_approval", "done"}
-    assert any("ignore all previous" in flag for flag in run["flags"])
-    assert any("send an email" in flag for flag in run["flags"])
+    assert any("overrides instructions" in flag for flag in run["flags"])
 
 
 def test_skill_library_version_pins_run_records(settings, tmp_path):

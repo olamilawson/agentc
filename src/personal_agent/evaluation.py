@@ -21,7 +21,9 @@ import json
 import shutil
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from personal_agent.config import REPO_ROOT, Settings, load_settings
 from personal_agent.db import Database
@@ -42,7 +44,9 @@ def _is_gate_item(item: dict) -> bool:
     return item.get("synthetic") is False and bool((item.get("owner") or {}).get("scores"))
 
 
-def run_brief_set(items: list[dict], settings: Settings, gateway: ModelGateway | None = None) -> list[dict]:
+@contextmanager
+def scratch_engine(settings: Settings, gateway: ModelGateway | None = None) -> Iterator[Engine]:
+    """An engine on a throwaway database, checkpoint store and client root."""
     workdir = Path(tempfile.mkdtemp(prefix="personal-agent-eval-"))
     scratch = settings.model_copy(update={
         "database_url": f"sqlite:///{workdir / 'app.db'}",
@@ -52,11 +56,16 @@ def run_brief_set(items: list[dict], settings: Settings, gateway: ModelGateway |
     db = Database(scratch.database_url)
     engine = Engine(scratch, db, gateway=gateway)
     try:
-        return [_run_brief_item(engine, item) for item in items]
+        yield engine
     finally:
         engine.checkpointer.conn.close()
         db.engine.dispose()
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_brief_set(items: list[dict], settings: Settings, gateway: ModelGateway | None = None) -> list[dict]:
+    with scratch_engine(settings, gateway) as engine:
+        return [_run_brief_item(engine, item) for item in items]
 
 
 def _run_brief_item(engine: Engine, item: dict) -> dict:
@@ -221,23 +230,32 @@ def format_report(report: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from personal_agent import safety  # imports this module's scratch_engine
+
     parser = argparse.ArgumentParser(prog="python -m personal_agent.evaluation", description=__doc__.split("\n\n")[0])
-    parser.add_argument("workflow", choices=WORKFLOWS)
-    parser.add_argument("--set", type=Path, help="evaluation set (default: evaluation/sets/<workflow>.jsonl)")
+    parser.add_argument("set_name", metavar="set", choices=WORKFLOWS + safety.SAFETY_SETS,
+                        help="a workflow's evaluation set, or a safety set: " + ", ".join(WORKFLOWS + safety.SAFETY_SETS))
+    parser.add_argument("--set", type=Path, dest="path", help="set file (default: evaluation/sets/<set>.jsonl)")
     parser.add_argument("--min-agreement", type=float, help="share of scores within one point that the owner requires, 0 to 1")
     parser.add_argument("--limit", type=int, help="run only the first N items (never satisfies the gate)")
     parser.add_argument("--out", type=Path, help="write the full report as JSON")
     args = parser.parse_args(argv)
 
-    set_path = args.set or REPO_ROOT / "evaluation" / "sets" / f"{args.workflow}.jsonl"
-    report = evaluate(
-        args.workflow, set_path, load_settings(), min_agreement=args.min_agreement, limit=args.limit
-    )
-    print(format_report(report))
+    set_path = args.path or REPO_ROOT / "evaluation" / "sets" / f"{args.set_name}.jsonl"
+    if args.set_name in safety.SAFETY_SETS:
+        report = safety.evaluate_safety(args.set_name, set_path, load_settings(), limit=args.limit)
+        print(safety.format_safety_report(report))
+        passed = report["passed"]
+    else:
+        report = evaluate(
+            args.set_name, set_path, load_settings(), min_agreement=args.min_agreement, limit=args.limit
+        )
+        print(format_report(report))
+        passed = report["gate"]["passed"]
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    return 0 if report["gate"]["passed"] else 1
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

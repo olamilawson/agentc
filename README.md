@@ -87,9 +87,10 @@ restore drill, and one secret per provider in the server environment.
 
 ## Next phases (PRD delivery order)
 
-1. Brief evaluation: the graph exists; still owed are the owner-scored
-   evaluation set, the injection and separation safety sets, and a live run
-   measuring agreement (gate: both sets pass on the owner's real briefs).
+1. Brief evaluation: the graph, the evaluation runner and both safety sets
+   exist, and the separation set passes. Still owed: the owner-scored
+   evaluation set, and a live run of it and of the injection set (gate: both
+   pass on the owner's real briefs).
 2. Sponsorship triage: Microsoft Graph via n8n watcher, ledger, Outlook drafts,
    sends under approval.
 3. Creative review and drafting: page rendering, image scoring, critique loop.
