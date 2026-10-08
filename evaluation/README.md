@@ -21,6 +21,29 @@ scores. The intended path: the owner corrects or replaces the provisional
 scores with their own (ideally swapping in real past briefs), flips the flag,
 and the same file becomes the gate set.
 
+## Running a set
+
+```bash
+uv run python -m personal_agent.evaluation brief-evaluation --min-agreement 0.8
+```
+
+This calls the providers in the route table, so it needs their keys and costs
+money (each item is bounded by the per-run ceilings). `--limit N` runs the first
+N items as a cheap smoke check; `--out report.json` saves the full report, which
+records the skill-library version and route table it ran against.
+
+Each item runs through the graph up to the approval node in a scratch database
+and is never approved, so nothing reaches the real run record, queue or client
+folders. The report gives the share of scores within one point of the reference
+(the owner's scores where present, the provisional ones otherwise), a
+per-criterion breakdown, decision agreement, quotes that do not appear in the
+brief, and gaps missed where an item's reference lists `gaps`.
+
+The command exits 0 only when the release gate passes: every item
+owner-scored and not synthetic, the whole set run, at least fifteen items, no
+failed runs, no invalid quotes, and agreement at or above `--min-agreement` —
+the level the owner sets; there is no default.
+
 ## Format
 
 One JSON object per line in `sets/<workflow>.jsonl`:
