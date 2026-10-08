@@ -1,0 +1,14 @@
+# Sponsorship triage policy (PRD: sponsorship triage / open decisions).
+#
+# PROVISIONAL: every value below was chosen by the builder so the workflow can
+# be built and tested. The owner sets the real ones before the workflow goes
+# live. Nothing is sent without the owner's approval whatever these say; they
+# only decide which route an enquiry takes and whether a reply is drafted.
+
+# Mean criterion score (1 to 5) at or above which an enquiry is pursued.
+pursue_at: 4.0
+# Mean score below which an enquiry is declined.
+decline_below: 2.5
+# An amount above this, in naira, escalates to the owner with no reply drafted.
+# Leave empty and every enquiry that names an amount escalates.
+escalate_above: 10000000

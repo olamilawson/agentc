@@ -29,11 +29,12 @@ from personal_agent.config import REPO_ROOT, Settings, load_settings
 from personal_agent.db import Database
 from personal_agent.engine.brief_evaluation import CRITERIA, unmatched_quotes
 from personal_agent.engine.runner import Engine
+from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
 from personal_agent.harness.models import ModelGateway
 from personal_agent.skills.loader import load_library
 
 MIN_GATE_ITEMS = 15  # PRD: at least fifteen real past items per workflow
-WORKFLOWS = ("brief-evaluation",)
+WORKFLOWS = ("brief-evaluation", "sponsorship-triage")
 
 
 def load_set(path: Path) -> list[dict]:
@@ -41,7 +42,8 @@ def load_set(path: Path) -> list[dict]:
 
 
 def _is_gate_item(item: dict) -> bool:
-    return item.get("synthetic") is False and bool((item.get("owner") or {}).get("scores"))
+    owner = item.get("owner") or {}
+    return item.get("synthetic") is False and bool(owner.get("scores") or owner.get("route"))
 
 
 @contextmanager
@@ -157,6 +159,117 @@ def judge_gate(items: list[dict], set_size: int, summary: dict, min_agreement: f
     return {"passed": not blocked, "min_agreement": min_agreement, "blocked_by": blocked}
 
 
+# --- sponsorship triage --------------------------------------------------------------
+# PRD measures: route agreement with the owner, escalations the agent missed.
+# Gate: no missed escalations on the set; no reply releasable without approval.
+def run_sponsorship_set(
+    items: list[dict], settings: Settings, gateway: ModelGateway | None = None
+) -> tuple[list[dict], int]:
+    """(results, mail released without approval). No item is ever approved, so
+    anything in the outbox afterwards was released without the owner."""
+    with scratch_engine(settings, gateway) as engine:
+        results = [_run_sponsorship_item(engine, item) for item in items]
+        return results, len(engine.db.list_outbox())
+
+
+def _run_sponsorship_item(engine: Engine, item: dict) -> dict:
+    run_id = engine.start_run("sponsorship-triage", SPONSORSHIP_CLIENT, {"message_id": item["id"], **item["mail"]})
+    run = engine.db.get_run(run_id)
+    out = run["outputs"] or {}
+    reference = (item.get("owner") or item.get("provisional") or {}).get("route")
+    route = out.get("route")
+    # A mail that is not a sponsorship request ends the run; everything else waits for the owner.
+    completed = run["status"] == "waiting_for_approval" or (run["status"] == "done" and route == "not_sponsorship")
+    return {
+        "id": item["id"],
+        "reference": "owner" if _is_gate_item(item) else "provisional",
+        "completed": completed,
+        "error": run["error_reason"] or (None if completed else f"run ended as {run['status']} on route {route}"),
+        "agent_route": route,
+        "reference_route": reference,
+        "route_reason": out.get("route_reason"),
+        "missed_escalation": completed and reference == "escalate" and route != "escalate",
+        "open_faults": out.get("faults") or [],
+        "tokens": (run["tokens_in"] or 0) + (run["tokens_out"] or 0),
+        "cost_usd": run["cost_usd"] or 0.0,
+    }
+
+
+def summarise_sponsorship(results: list[dict], released_without_approval: int) -> dict:
+    done = [r for r in results if r["completed"]]
+    return {
+        "items": len(results),
+        "failed": len(results) - len(done),
+        "route_agreement": _share(sum(r["agent_route"] == r["reference_route"] for r in done), len(done)),
+        "missed_escalations": [r["id"] for r in results if r["missed_escalation"]],
+        "items_with_open_faults": sum(bool(r["open_faults"]) for r in results),
+        "released_without_approval": released_without_approval,
+        "cost_usd": round(sum(r["cost_usd"] for r in results), 4),
+    }
+
+
+def judge_sponsorship_gate(items: list[dict], set_size: int, summary: dict, min_agreement: float | None) -> dict:
+    blocked = _set_blockers(items, set_size, summary)
+    if summary["missed_escalations"]:
+        blocked.append("missed escalations: " + ", ".join(summary["missed_escalations"]))
+    if summary["released_without_approval"]:
+        blocked.append(f"{summary['released_without_approval']} replies were released without approval")
+    # Route agreement is measured; it gates only if the owner sets a level for it.
+    if min_agreement is not None and (summary["route_agreement"] or 0) < min_agreement:
+        blocked.append(f"route agreement is {summary['route_agreement']}, below the owner's level {min_agreement}")
+    return {"passed": not blocked, "min_agreement": min_agreement, "blocked_by": blocked}
+
+
+def _set_blockers(items: list[dict], set_size: int, summary: dict) -> list[str]:
+    """What stops any set from being a gate set, whatever the workflow."""
+    blocked = []
+    not_gate = sum(not _is_gate_item(i) for i in items)
+    if not_gate:
+        blocked.append(
+            f"{not_gate} of {len(items)} items are synthetic or lack the owner's decisions; "
+            "a synthetic set never satisfies a release gate"
+        )
+    if len(items) < set_size:
+        blocked.append(f"only {len(items)} of the set's {set_size} items were run")
+    if set_size < MIN_GATE_ITEMS:
+        blocked.append(f"the set has {set_size} items; the minimum is {MIN_GATE_ITEMS}")
+    if summary["failed"]:
+        blocked.append(f"{summary['failed']} runs failed before reaching the owner")
+    return blocked
+
+
+def _format_sponsorship_report(report: dict) -> str:
+    s, gate = report["summary"], report["gate"]
+    lines = [
+        f"{report['workflow']}: {s['items']} items, {s['failed']} failed, cost ${s['cost_usd']:.2f}",
+        f"skill library {report['skill_library_version'][:12]}",
+        "",
+        f"route agreement            {_pct(s['route_agreement'])}",
+        f"missed escalations         {len(s['missed_escalations'])}",
+        f"released without approval  {s['released_without_approval']}",
+        f"items with open faults     {s['items_with_open_faults']}",
+        "",
+        "items",
+    ]
+    for r in report["items"]:
+        if not r["completed"]:
+            lines.append(f"  {r['id']}  FAILED  {r['error']}")
+        elif r["agent_route"] == r["reference_route"]:
+            lines.append(f"  {r['id']}  {r['agent_route']}")
+        else:
+            missed = "  MISSED ESCALATION" if r["missed_escalation"] else ""
+            lines.append(
+                f"  {r['id']}  {r['agent_route']} (reference: {r['reference_route']}){missed}  [{r['route_reason']}]"
+            )
+    lines.append("")
+    if gate["passed"]:
+        lines.append("RELEASE GATE: passed")
+    else:
+        lines.append("RELEASE GATE: not passed")
+        lines += [f"  - {reason}" for reason in gate["blocked_by"]]
+    return "\n".join(lines)
+
+
 def evaluate(
     workflow: str,
     set_path: Path,
@@ -169,9 +282,22 @@ def evaluate(
         raise ValueError(f"no evaluation runner for {workflow!r}; known: {', '.join(WORKFLOWS)}")
     all_items = load_set(set_path)
     items = all_items[:limit] if limit else all_items
+    version, _ = load_library(settings.skills_dir)
+    if workflow == "sponsorship-triage":
+        results, released = run_sponsorship_set(items, settings, gateway)
+        summary = summarise_sponsorship(results, released)
+        return {
+            "workflow": workflow,
+            "set": str(set_path),
+            "skill_library_version": version,
+            "route_table": {tier: route.model_dump() for tier, route in settings.route_table.items()},
+            "sponsorship_policy": settings.sponsorship.model_dump() if settings.sponsorship else None,
+            "summary": summary,
+            "gate": judge_sponsorship_gate(items, len(all_items), summary, min_agreement),
+            "items": results,
+        }
     results = run_brief_set(items, settings, gateway)
     summary = summarise(results)
-    version, _ = load_library(settings.skills_dir)
     return {
         "workflow": workflow,
         "set": str(set_path),
@@ -190,6 +316,8 @@ def _pct(share: float | None) -> str:
 
 
 def format_report(report: dict) -> str:
+    if report["workflow"] == "sponsorship-triage":
+        return _format_sponsorship_report(report)
     s, gate = report["summary"], report["gate"]
     lines = [
         f"{report['workflow']}: {s['items']} items, {s['failed']} failed, cost ${s['cost_usd']:.2f}",

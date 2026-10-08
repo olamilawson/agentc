@@ -31,6 +31,15 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Sponsorship triage graph** — new enquiry → classify (cheap) → look up
+  history (ledger) → score and route (strong; the route is decided in code from
+  `config/sponsorship.yaml`) → draft reply (standard) → check reply (facts in
+  code, then a model; returns twice at most) → owner approval → send and log.
+  Enquiries arrive through `POST /hooks/n8n/sponsorship` (shared secret); the
+  ledger is at `GET /ledger` and the owner corrects rows with `PATCH`. **Mail is
+  not connected:** an approved reply is held in a local outbox (`GET /outbox`)
+  and reported as not sent. The criteria and thresholds are provisional. See
+  `docs/adr/0004-sponsorship-triage.md`.
 - **Skill library** — versioned `skills/*/SKILL.md` files; every run records
   the library version it used; the agent never edits them.
 - **Client folders** — one directory per client; runs carry an immutable client
@@ -74,6 +83,15 @@ curl -s localhost:8000/runs -X POST -H 'content-type: application/json' \
 # or: "inputs":{"brief_text":"..."}
 ```
 
+Post a sponsorship enquiry the way n8n will (set `PERSONAL_AGENT_N8N_SECRET`
+before starting the server; without it the hook answers 503):
+
+```bash
+curl -s localhost:8000/hooks/n8n/sponsorship -X POST -H 'content-type: application/json' \
+  -H "x-agent-secret: $PERSONAL_AGENT_N8N_SECRET" \
+  -d '{"message_id":"m-1","sender":"ada@example.org","sender_name":"Ada","subject":"Partnership","body":"We would like your bank as a partner for 8m naira."}'
+```
+
 With no provider keys configured the model call will fail honestly — runs that
 need a model stop with a clear reason. Tests never call a provider.
 
@@ -91,8 +109,10 @@ restore drill, and one secret per provider in the server environment.
    exist, and the separation set passes. Still owed: the owner-scored
    evaluation set, and a live run of it and of the injection set (gate: both
    pass on the owner's real briefs).
-2. Sponsorship triage: Microsoft Graph via n8n watcher, ledger, Outlook drafts,
-   sends under approval.
+2. Sponsorship triage: the graph, ledger and webhook exist. Still owed: the
+   owner's criteria, thresholds and amount limit; the Microsoft Graph
+   application (read mail and calendar, Outlook drafts, send); the n8n watcher
+   itself; an owner-scored evaluation set.
 3. Creative review and drafting: page rendering, image scoring, critique loop.
 4. Learning and tools: weekly review of owner edits, skill-library diffs,
    Canva/Higgsfield via MCP, cost screens.

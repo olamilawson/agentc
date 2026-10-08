@@ -24,6 +24,7 @@ services:
       PERSONAL_AGENT_DATABASE_URL: postgresql+psycopg://personal_agent:${POSTGRES_PASSWORD}@postgres:5432/personal_agent
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PERSONAL_AGENT_N8N_SECRET: ${PERSONAL_AGENT_N8N_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

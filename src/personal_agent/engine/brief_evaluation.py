@@ -22,10 +22,10 @@ from typing import Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, model_validator
 
+from personal_agent.engine import steps
 from personal_agent.engine.approval import make_approval_node
 from personal_agent.engine.graph import ROLE
 from personal_agent.gateway.tools import content_hash
-from personal_agent.harness.budgets import BudgetTracker
 from personal_agent.harness.context import build_context
 from personal_agent.harness.contract import StepContract, StepFailed
 
@@ -366,27 +366,10 @@ def build_brief_graph(h):
     skill_text = h.skills.get(SKILL, "")
 
     def run_model(node: str, state: BriefState, payload: dict, rubric: str) -> tuple[dict, dict]:
-        """One bounded model call under the node's contract. The brief travels
-        as marked data; the other inputs are the node's declared fields."""
-        tracker = BudgetTracker(h.settings.budgets)
-        prior = state.get("usage") or {}
-        tracker.add_usage(prior.get("tokens_in", 0), prior.get("tokens_out", 0), prior.get("cost_usd", 0.0))
-        context, _ = build_context(
-            ROLE,
-            rubric,
-            [],
-            [("brief", state["brief_text"])],
-            {k: v for k, v in payload.items() if k != "brief_text"},
+        """The brief travels as marked data; the other inputs are the node's declared fields."""
+        return steps.run_model(
+            h, node, state, payload, rubric, [("brief", state["brief_text"])], hide=("brief_text",)
         )
-        out = h.node_runner(tracker).run(h.contracts[node], payload, context=context)
-        return out, {
-            "usage": {
-                "tokens_in": tracker.tokens_in,
-                "tokens_out": tracker.tokens_out,
-                "cost_usd": tracker.cost_usd,
-            },
-            "fallback_used": state.get("fallback_used", False) or getattr(h.gateway, "used_fallback", False),
-        }
 
     def receive_brief(state: BriefState) -> dict:
         # Code node: the brief is a file in the run's client folder (read through

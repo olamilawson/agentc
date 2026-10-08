@@ -19,6 +19,12 @@ from personal_agent.config import Settings
 from personal_agent.db import Database, new_id
 from personal_agent.engine.brief_evaluation import brief_contracts, brief_outputs, build_brief_graph
 from personal_agent.engine.graph import ROLE, DraftIn, DraftOut, build_test_graph
+from personal_agent.engine.sponsorship_triage import (
+    build_sponsorship_graph,
+    on_rejected as sponsorship_rejected,
+    sponsorship_contracts,
+    sponsorship_outputs,
+)
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
 from personal_agent.harness.contract import StepContract, StepFailed
@@ -71,6 +77,10 @@ class Harness:
                 },
             )
         )
+        # Release-class mail. Microsoft Graph is not connected yet: an approved
+        # message is held in the local outbox and reported as not sent. The Graph
+        # send tool replaces this function under the same name, class and approval.
+        self.tools.register(ToolSpec(name="send_mail", cls=ToolClass.RELEASE, fn=self._hold_mail))
         # Draft-class: a document in the run's own client folder (reversible).
         self.tools.register(
             ToolSpec(
@@ -84,6 +94,16 @@ class Harness:
                 },
             )
         )
+
+    def _hold_mail(self, payload: dict) -> dict:
+        outbox_id = self.db.add_to_outbox(
+            payload["to"], payload["subject"], payload["body"], payload.get("in_reply_to")
+        )
+        return {
+            "sent": False,
+            "outbox_id": outbox_id,
+            "note": "Microsoft Graph is not connected; the approved reply is held in the local outbox.",
+        }
 
     def _read_client_file(self, payload: dict) -> dict:
         scope = ClientScope(payload["client"])
@@ -135,11 +155,13 @@ def _test_outputs(state: dict) -> dict | None:
 class Workflow:
     build: Callable  # (Harness) -> StateGraph
     outputs: Callable[[dict], dict | None]  # graph state -> the run record's outputs
+    on_rejected: Callable | None = None  # (db, run, comment) when the owner rejects
 
 
 WORKFLOWS: dict[str, Workflow] = {
     "foundation-test": Workflow(build_test_graph, _test_outputs),
     "brief-evaluation": Workflow(build_brief_graph, brief_outputs),
+    "sponsorship-triage": Workflow(build_sponsorship_graph, sponsorship_outputs, sponsorship_rejected),
 }
 
 
@@ -156,7 +178,7 @@ class Engine:
             settings=settings,
             db=db,
             gateway=gateway or ModelGateway(settings.route_table),
-            contracts={**default_contracts(), **brief_contracts()},
+            contracts={**default_contracts(), **brief_contracts(), **sponsorship_contracts()},
             skill_text=skills.get("foundation-test", ""),
             skills=skills,
         )
@@ -201,6 +223,9 @@ class Engine:
             self._invoke(run_id, Command(resume={"approval_id": approval_id}), None)
         elif decision == "rejected":
             self.db.update_run(run_id, status="cancelled", error_reason=f"rejected by owner: {comment}")
+            hook = WORKFLOWS[run["workflow"]].on_rejected
+            if hook:
+                hook(self.db, run, comment)
         else:  # sent_back: comment recorded; a revision pass starts with the real workflows
             self.db.audit(run_id, "sent_back", {"comment": comment})
         return self.db.get_run(run_id)
@@ -230,6 +255,9 @@ class Engine:
                     "content": pending["content"],
                     "content_hash": pending["content_hash"],
                     "error": pending.get("error"),
+                    # What approving does, and what the owner should know beside the content.
+                    "action": pending.get("action", "release"),
+                    "notes": pending.get("notes", []),
                 }
             )
         return items

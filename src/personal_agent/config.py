@@ -28,6 +28,15 @@ class Budgets(BaseModel):
     max_elapsed_seconds: int = 600
 
 
+class SponsorshipPolicy(BaseModel):
+    """The owner's thresholds for sponsorship triage (config/sponsorship.yaml)."""
+
+    pursue_at: float
+    decline_below: float
+    # Naira. None: every enquiry that names an amount escalates.
+    escalate_above: float | None = None
+
+
 class Settings(BaseModel):
     database_url: str
     checkpoint_path: Path
@@ -35,6 +44,10 @@ class Settings(BaseModel):
     budgets: Budgets
     skills_dir: Path
     clients_dir: Path
+    # None: no policy is configured and every sponsorship enquiry escalates.
+    sponsorship: SponsorshipPolicy | None = None
+    # Shared secret for the n8n webhook; None disables the webhook.
+    n8n_secret: str | None = None
 
 
 def load_settings() -> Settings:
@@ -54,7 +67,11 @@ def load_settings() -> Settings:
     budget_path = Path(os.environ.get("PERSONAL_AGENT_BUDGETS", REPO_ROOT / "config" / "budgets.yaml"))
     routes = {tier: TierRoute(**r) for tier, r in yaml.safe_load(route_path.read_text()).items()}
     budgets = Budgets(**yaml.safe_load(budget_path.read_text()))
+    policy_path = Path(os.environ.get("PERSONAL_AGENT_SPONSORSHIP", REPO_ROOT / "config" / "sponsorship.yaml"))
+    policy = SponsorshipPolicy(**yaml.safe_load(policy_path.read_text())) if policy_path.exists() else None
     return Settings(
+        sponsorship=policy,
+        n8n_secret=os.environ.get("PERSONAL_AGENT_N8N_SECRET") or None,
         database_url=db,
         checkpoint_path=ckpt,
         route_table=routes,

@@ -19,7 +19,9 @@ from sqlalchemy import (
     String,
     Table,
     create_engine,
+    func,
     insert,
+    or_,
     select,
     update,
 )
@@ -82,6 +84,41 @@ tool_calls = Table(
     Column("idempotency_key", String, index=True),
     Column("outcome", String),  # executed | refused | awaiting_approval | replay | uncertain
     Column("detail", JSON),
+    Column("created_at", String),
+)
+
+
+# One row per sponsorship enquiry. Written by the agent after each decision;
+# the owner can correct any row.
+sponsorship_ledger = Table(
+    "sponsorship_ledger",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("run_id", String, index=True),
+    Column("message_id", String, index=True),
+    Column("received_at", String),
+    Column("sender", String, index=True),
+    Column("organisation", String),
+    Column("request", String),
+    Column("amount", String),
+    Column("route", String),
+    Column("decision", String),
+    Column("outcome", String),
+    Column("created_at", String),
+    Column("updated_at", String),
+)
+LEDGER_FIELDS = ("received_at", "sender", "organisation", "request", "amount", "route", "decision", "outcome")
+
+# Approved mail held locally until Microsoft Graph is connected. Nothing in
+# this table has been delivered to anyone.
+outbox = Table(
+    "outbox",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("recipient", String, nullable=False),
+    Column("subject", String),
+    Column("body", String),
+    Column("in_reply_to", String),
     Column("created_at", String),
 )
 
@@ -189,6 +226,85 @@ class Database:
                 .first()
             )
         return dict(row) if row else None
+
+    # --- sponsorship ledger ----------------------------------------------------
+    def create_ledger_row(self, run_id: str, **fields) -> str:
+        ledger_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(
+                insert(sponsorship_ledger).values(
+                    id=ledger_id, run_id=run_id, created_at=now(), updated_at=now(), **fields
+                )
+            )
+        return ledger_id
+
+    def update_ledger_row(self, ledger_id: str, **fields) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(
+                update(sponsorship_ledger)
+                .where(sponsorship_ledger.c.id == ledger_id)
+                .values(**fields, updated_at=now())
+            )
+
+    def get_ledger_row(self, ledger_id: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(
+                select(sponsorship_ledger).where(sponsorship_ledger.c.id == ledger_id)
+            ).mappings().first()
+        return dict(row) if row else None
+
+    def ledger_row_for_run(self, run_id: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(
+                select(sponsorship_ledger).where(sponsorship_ledger.c.run_id == run_id)
+            ).mappings().first()
+        return dict(row) if row else None
+
+    def list_ledger(self) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [
+                dict(r)
+                for r in cx.execute(
+                    select(sponsorship_ledger).order_by(sponsorship_ledger.c.created_at.desc())
+                ).mappings()
+            ]
+
+    def ledger_history(self, sender: str, organisation: str | None, exclude_run_id: str) -> list[dict]:
+        """Earlier enquiries from the same sender or the same organisation."""
+        same = func.lower(sponsorship_ledger.c.sender) == sender.lower()
+        if organisation:
+            same = or_(same, func.lower(sponsorship_ledger.c.organisation) == organisation.lower())
+        stmt = (
+            select(sponsorship_ledger)
+            .where(same, sponsorship_ledger.c.run_id != exclude_run_id)
+            .order_by(sponsorship_ledger.c.created_at.desc())
+            .limit(10)
+        )
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(stmt).mappings()]
+
+    def find_run_by_message(self, workflow: str, message_id: str) -> dict | None:
+        """The run already started for a mail, so a repeated delivery starts nothing."""
+        for run in self.list_runs():
+            if run["workflow"] == workflow and (run["inputs"] or {}).get("message_id") == message_id:
+                return run
+        return None
+
+    # --- outbox (mail approved but not delivered) --------------------------------
+    def add_to_outbox(self, recipient: str, subject: str, body: str, in_reply_to: str | None) -> str:
+        outbox_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(
+                insert(outbox).values(
+                    id=outbox_id, recipient=recipient, subject=subject, body=body,
+                    in_reply_to=in_reply_to, created_at=now(),
+                )
+            )
+        return outbox_id
+
+    def list_outbox(self) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(select(outbox).order_by(outbox.c.created_at.desc())).mappings()]
 
     # --- tool calls ------------------------------------------------------------
     def record_tool_call(

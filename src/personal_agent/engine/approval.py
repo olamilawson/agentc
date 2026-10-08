@@ -15,11 +15,18 @@ from personal_agent.db import Database
 from personal_agent.gateway.tools import content_hash
 
 
-def make_approval_node(db: Database, payload_of: Callable[[dict], dict]):
+def make_approval_node(
+    db: Database,
+    payload_of: Callable[[dict], dict],
+    about: Callable[[dict], dict] | None = None,
+):
     """payload_of(state) returns the exact content the owner is asked to approve.
 
     It must be deterministic for a given state: the node re-runs from the top
     when the graph resumes, and the hash has to come out the same.
+
+    about(state) adds what the owner needs beside the content and is not part
+    of it: "action" (what approving does) and "notes" (lines shown above it).
     """
 
     def approval(state: dict) -> dict:
@@ -34,6 +41,7 @@ def make_approval_node(db: Database, payload_of: Callable[[dict], dict]):
                 "content": payload,
                 "content_hash": p_hash,
                 "error": state.get("approval_error"),
+                **(about(state) if about else {}),
             }
         )
         rec = db.get_approval(resume["approval_id"])
