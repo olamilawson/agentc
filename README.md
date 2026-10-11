@@ -148,17 +148,20 @@ Postgres: when `PERSONAL_AGENT_DATABASE_URL` is a Postgres URL the engine uses
 the Postgres checkpointer and creates its tables at startup; with a SQLite URL
 (local development, tests) it uses the SQLite checkpoint file.
 
-The Postgres checkpoint path has one test, skipped everywhere but here. Run it
-on the server from the repository directory, after `docker compose up -d
---build`:
+Deploy with `deploy/deploy.sh`, from a checkout at the commit to deploy. It
+builds the api image, runs the Postgres checkpointer test in a throwaway
+container of that image, and only if the test passes replaces the running
+containers and waits for `/health`. A failed or skipped test stops the deploy
+with the old api still running.
+
+That test (`tests/test_postgres_checkpointer.py`) is skipped everywhere but on
+the server. It starts a run, leaves it waiting for approval, and approves it
+from a fresh engine, all in a scratch database it creates on the compose
+Postgres and drops afterwards. To run it alone:
 
 ```bash
 docker compose run --rm -v "$PWD/tests:/app/tests:ro" api sh -c "uv pip install --system pytest httpx && python -m pytest tests/test_postgres_checkpointer.py -q -p no:cacheprovider"
 ```
-
-It starts a run, leaves it waiting for approval, and approves it from a fresh
-engine, all in a scratch database it creates on the compose Postgres and drops
-afterwards. The container is thrown away, so pytest does not stay in the image.
 
 ## Next phases (PRD delivery order)
 
