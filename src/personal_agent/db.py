@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Table,
     create_engine,
+    delete,
     func,
     insert,
     or_,
@@ -122,6 +123,16 @@ outbox = Table(
     Column("created_at", String),
 )
 
+
+# What the owner has set for a client. A client is its folder; this holds only
+# the settings that are not files.
+client_settings = Table(
+    "client_settings",
+    metadata,
+    Column("name", String, primary_key=True),
+    Column("retention_days", Integer),  # None: keep until the owner deletes
+    Column("updated_at", String),
+)
 
 # The trace of a run (PRD: tracing in run tables). One row each time a graph
 # node finishes, fails or stops to wait for the owner, in order.
@@ -306,6 +317,54 @@ class Database:
                 .first()
             )
         return dict(row) if row else None
+
+    # --- client settings, retention and deletion ---------------------------------
+    def get_retention_days(self, client: str) -> int | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(select(client_settings).where(client_settings.c.name == client)).mappings().first()
+        return row["retention_days"] if row else None
+
+    def set_retention_days(self, client: str, days: int | None) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(client_settings).where(client_settings.c.name == client))
+            cx.execute(insert(client_settings).values(name=client, retention_days=days, updated_at=now()))
+
+    def forget_client_settings(self, client: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(client_settings).where(client_settings.c.name == client))
+
+    def list_runs_for_client(self, client: str) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(select(runs).where(runs.c.client == client)).mappings()]
+
+    def delete_run_payloads(self, run_id: str, marker: dict) -> None:
+        """Remove what a run held of its client's material, everywhere it is kept.
+
+        The run row stays, with its workflow, client name, status, times, tokens
+        and cost, so cost history still adds up. The audit log is append-only
+        and is not touched.
+        """
+        with self.engine.begin() as cx:
+            # An approved reply held for sending is found through its tool call.
+            held = [
+                (row["detail"] or {}).get("outbox_id")
+                for row in cx.execute(select(tool_calls.c.detail).where(tool_calls.c.run_id == run_id)).mappings()
+                if isinstance(row["detail"], dict)
+            ]
+            for outbox_id in filter(None, held):
+                cx.execute(delete(outbox).where(outbox.c.id == outbox_id))
+            cx.execute(
+                update(runs).where(runs.c.id == run_id)
+                .values(inputs=None, outputs=marker, error_reason=None, flags=[], updated_at=now())
+            )
+            cx.execute(update(run_steps).where(run_steps.c.run_id == run_id).values(output=None, error=None))
+            cx.execute(
+                update(model_calls).where(model_calls.c.run_id == run_id).values(input=None, output=None, error=None)
+            )
+            cx.execute(update(tool_calls).where(tool_calls.c.run_id == run_id).values(detail=None))
+            cx.execute(update(approvals).where(approvals.c.run_id == run_id).values(comment=None))
+            cx.execute(delete(owner_edits).where(owner_edits.c.run_id == run_id))
+            cx.execute(delete(sponsorship_ledger).where(sponsorship_ledger.c.run_id == run_id))
 
     # --- trace: run steps and model calls ------------------------------------------
     def _next_seq(self, cx, run_id: str) -> int:

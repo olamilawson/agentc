@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
-from personal_agent import costs, learning, tracing
+from personal_agent import costs, learning, retention, tracing
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
@@ -78,7 +78,7 @@ class LedgerCorrection(BaseModel):
 
 
 NAV = (
-    '<nav><a href="/queue">Approval queue</a> <a href="/inspect">Runs</a> '
+    '<nav><a href="/queue">Approval queue</a> <a href="/inspect">Runs</a> <a href="/files">Clients</a> '
     '<a href="/library">Skill library</a> <a href="/cost">Settings and cost</a></nav>'
 )
 
@@ -269,6 +269,98 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     def owner_edits(run_id: str) -> list[dict]:
         # What the owner changed before approving, kept for the learning loop.
         return db.list_owner_edits(run_id)
+
+    # --- clients: files, retention, deletion ------------------------------------------
+    def _client_view(name: str) -> dict:
+        files = engine.harness.clients.list_files(engine.harness.clients.scope(name))
+        return {
+            "client": name,
+            "files": len(files),
+            "bytes": sum(f["size"] for f in files),
+            "runs": len(db.list_runs_for_client(name)),
+            "retention_days": db.get_retention_days(name),
+        }
+
+    async def _fields(request: Request) -> dict:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            return await request.json()
+        return dict(await request.form())
+
+    @app.get("/clients/{name}")
+    def client_detail(name: str) -> dict:
+        try:
+            return _client_view(name)
+        except KeyError:
+            raise HTTPException(404, f"unknown client {name!r}")
+
+    @app.post("/clients/{name}/retention")
+    async def set_client_retention(name: str, request: Request) -> dict:
+        # days: how long this client's material is kept. Empty: until the client is deleted.
+        raw = (await _fields(request)).get("days")
+        try:
+            days = None if raw in (None, "") else int(raw)
+            return retention.set_retention(engine, name, days)
+        except KeyError:
+            raise HTTPException(404, f"unknown client {name!r}")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/retention/apply")
+    def apply_retention() -> list[dict]:
+        # Removes what is past each client's period now; the daily job does the same.
+        return retention.apply_retention(engine)
+
+    @app.post("/clients/{name}/delete")
+    async def delete_client(name: str, request: Request) -> dict:
+        # Irreversible, so the request must repeat the client's name.
+        if str((await _fields(request)).get("confirm", "")) != name:
+            raise HTTPException(400, "to delete a client, send its exact name as 'confirm'")
+        try:
+            return retention.delete_client(engine, name)
+        except KeyError:
+            raise HTTPException(404, f"unknown client {name!r}")
+
+    @app.get("/files", response_class=HTMLResponse)
+    def clients_page() -> str:
+        cards = []
+        for name in engine.harness.clients.list_clients():
+            c = _client_view(name)
+            kept = "until you delete the client" if c["retention_days"] is None else f"{c['retention_days']} days"
+            cards.append(
+                f"""<section class="card">
+                  <h3>{escape(name)}</h3>
+                  <p class="meta">{c["files"]} files · {c["bytes"] / 1024:.0f} KB · {c["runs"]} runs · kept {kept}</p>
+                  <form method="post" action="/clients/{escape(name)}/files" enctype="multipart/form-data">
+                    <input type="file" name="file"/> <button>Upload</button>
+                  </form>
+                  <form method="post" action="/clients/{escape(name)}/retention">
+                    <label>Keep for <input type="number" name="days" min="1" size="5"
+                      value="{c["retention_days"] or ""}"/> days</label>
+                    <button>Set</button> <span class="meta">empty keeps everything</span>
+                  </form>
+                  <details><summary>Delete this client</summary>
+                    <p>Removes the folder and the content of every run made for {escape(name)}: briefs, drafts,
+                     scores, replies and model inputs and outputs. Run costs and the audit log stay. This cannot be undone.</p>
+                    <form method="post" action="/clients/{escape(name)}/delete">
+                      <input type="text" name="confirm" placeholder="type {escape(name)} to confirm"/>
+                      <button class="reject">Delete {escape(name)}</button>
+                    </form>
+                  </details>
+                </section>"""
+            )
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8"/><title>Clients — Personal Agent</title><style>{PAGE_STYLE}
+ form {{ margin: .4rem 0; }} .reject {{ background: #7a2c22; color: #fff; }}
+ button {{ padding: .3rem .7rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
+</style></head>
+<body>
+{NAV}
+<h1>Clients</h1>
+<p>Each client has its own folder; a run sees only its own client's files. A retention period removes files and
+ run content older than it, once a day.</p>
+<form method="post" action="/retention/apply"><button>Apply retention periods now</button></form>
+{"".join(cards) or "<p>No clients yet.</p>"}
+</body></html>"""
 
     # --- runs screen ------------------------------------------------------------------
     @app.get("/runs/{run_id}/trace")
@@ -478,7 +570,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <tr><td>Mail watcher webhook</td><td>{"on" if settings.n8n_secret else "off (no shared secret set)"}</td></tr>
 <tr><td>Creative review</td><td>images up to {settings.creative_review.image_max_edge} px,
  {settings.creative_review.pages_per_group} pages a call, {settings.creative_review.max_pages} pages at most</td></tr>
-<tr><td>Retention per client</td><td>not built yet</td></tr>
+<tr><td>Retention per client</td><td>set for each client on the <a href="/files">Clients</a> page</td></tr>
 </table>
 <p class="meta">These are read from the files in <code>config/</code> and the server environment.
  Change them there; this screen does not edit them.</p>

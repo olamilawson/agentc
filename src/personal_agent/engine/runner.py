@@ -373,6 +373,12 @@ class Engine:
                 self._invoke(run_id, Command(resume={"approval_id": approval_id}), None)
         return self.db.get_run(run_id)
 
+    def forget_run(self, run_id: str, marker: dict) -> None:
+        """Remove a run's payloads and its checkpoints (which hold the same
+        material as graph state). The run row and its cost remain."""
+        self.checkpointer.delete_thread(run_id)
+        self.db.delete_run_payloads(run_id, marker)
+
     def provide_input(self, run_id: str, answers: str) -> dict:
         """The owner's answers to a run that asked questions and is waiting."""
         run = self.db.get_run(run_id)
@@ -380,7 +386,9 @@ class Engine:
             raise KeyError(run_id)
         if run["status"] != "waiting_for_input":
             raise ValueError(f"run {run_id} is {run['status']}, not waiting for input")
-        self.db.audit(run_id, "input_provided", {"answers": answers})
+        # The answers are client material and live in the run; the audit log, which is
+        # never erased, records only that they were given.
+        self.db.audit(run_id, "input_provided", {"characters": len(answers)})
         self._invoke(run_id, Command(resume={"answers": answers}), None)
         return self.db.get_run(run_id)
 

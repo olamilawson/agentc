@@ -109,6 +109,28 @@ class ClientStore:
             key=lambda f: f["path"],
         )
 
+    # --- retention and deletion ---------------------------------------------------
+    def delete_files_older_than(self, scope: ClientScope, cutoff: float) -> list[str]:
+        """Delete this client's files last changed before `cutoff` (a timestamp)."""
+        folder, removed = self.folder(scope), []
+        for path in sorted(folder.rglob("*")):
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed.append(str(path.relative_to(folder)).replace("\\", "/"))
+        return removed
+
+    def delete_folder(self, scope: ClientScope) -> int:
+        """Remove the client's folder and everything in it; returns the file count."""
+        import shutil
+
+        folder = self.folder(scope).resolve()
+        # Refuse anything that is not a direct child of the client root.
+        if folder.parent != self.root.resolve() or not folder.is_dir():
+            raise CrossClientAccess(f"{scope.name!r} is not a client folder")
+        count = sum(1 for p in folder.rglob("*") if p.is_file())
+        shutil.rmtree(folder)
+        return count
+
     def _within_scope(self, scope: ClientScope, relpath: str) -> Path:
         folder = self.folder(scope)
         candidate = (folder / relpath).resolve()

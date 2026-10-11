@@ -31,6 +31,19 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Client retention and deletion** — `/files` lists clients with an upload
+  box, a retention period and a delete control. A retention period (days, or
+  empty to keep everything) removes that client's files by when they were last
+  changed and the content of its finished runs by their last activity; run it
+  daily with `python -m personal_agent.retention`. Deleting a client removes
+  its folder and the content of every run made for it, everywhere that content
+  is kept: the run record, the trace, tool-call results, checkpoints, owner
+  edits, and for sponsorship the ledger rows and held mail. Open runs are
+  cancelled. What stays: each run's row with its status, times and cost; the
+  client's name on those rows; and the audit log, which is append-only and can
+  hold file names, owner comments and route reasons. **Backups are not
+  reached:** material deleted here remains in earlier backups until they
+  expire.
 - **Runs screen** — `/inspect` lists runs; `/inspect/<run_id>` shows one: each
   step in order with its status and duration, every model call in it (tier,
   model, tokens, cost, prompt version, inputs and output, including invalid
