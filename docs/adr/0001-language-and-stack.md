@@ -14,10 +14,14 @@ Python 3.12 for all agent code, with:
   (cheap/standard/strong) map to providers via `config/route_table.yaml`, so
   changing a model never requires changing code. Named fallback per tier.
 - **FastAPI** for the web app/API (approval queue, runs, clients).
-- **PostgreSQL** for all state on the VPS; **SQLAlchemy Core** for app tables
-  (runs, approvals, audit) so the same code runs on SQLite for local tests.
-  LangGraph checkpoints: SQLite locally, Postgres (`langgraph-checkpoint-postgres`)
-  in deployment.
+- **PostgreSQL** for all database state on the VPS; **SQLAlchemy Core** for app
+  tables (runs, approvals, audit) so the same code runs on SQLite for local tests.
+  LangGraph checkpoints follow the database URL: a Postgres URL selects the
+  Postgres checkpointer (`langgraph-checkpoint-postgres`, in the same database
+  as the app tables, its tables created at startup); a SQLite URL selects the
+  SQLite checkpoint file. Client folders are files on disk, not database rows:
+  on the VPS they live in `./data` beside the compose file, mounted into the
+  API container.
 - **Caddy + Docker Compose** on the existing Hostinger VPS, as the PRD defaults.
 
 ## Reasons
@@ -33,6 +37,12 @@ Python 3.12 for all agent code, with:
 
 ## Consequences
 
+- The Postgres driver and checkpointer come with the `deploy` extra and are
+  imported only when the database URL is Postgres, so local runs do not need
+  them. The Postgres checkpoint path is therefore not covered by the test
+  suite, which runs on SQLite.
+- A backup needs both the Postgres dump (app tables and checkpoints) and the
+  `./data` directory (client folders); `deploy/backup.sh` takes both.
 - Local development needs Python via uv (uv-managed interpreter) and runs tests
   on SQLite without Docker; Docker is only required for the VPS deployment.
 - Future candidates that assume TypeScript (e.g. forking Chidimma OS's Next.js
