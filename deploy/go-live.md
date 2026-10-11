@@ -4,18 +4,22 @@ You run these steps on the Hostinger VPS and in the Hostinger panel. The app
 cannot do them for you. Work through them in order; each step says how to
 confirm it.
 
-## 1. Check that ports 80 and 443 are free
+## 1. How this server takes web traffic
 
-n8n runs on this server. Many n8n installs put their own proxy on ports 80 and
-443, and Caddy needs both.
+This VPS serves several domains. Its own nginx holds ports 80 and 443 and
+passes each domain to an app on a local port. The agent joins the same way: it
+listens on `127.0.0.1:8100`, and one nginx site passes ijeoma.pro to it. The
+Caddy service in `docker-compose.yml` stays off here. Nothing in these steps
+names another domain.
+
+Confirm the port is free. No output means it is.
 
 ```bash
-sudo ss -ltnp | grep -E ':(80|443)\s'
+ss -ltn | grep ':8100 '
 ```
 
-No output means the ports are free. If the command lists a process, stop here:
-that proxy and Caddy cannot share the ports. Either route ijeoma.pro through
-the proxy that holds them, or move n8n behind Caddy. Decide before you go on.
+If it is taken, add `API_PORT=<a free port>` to `.env` in step 5 and use that
+port in the nginx file in step 9.
 
 ## 2. Point the domain at the server
 
@@ -64,8 +68,6 @@ Fill in these lines in `.env`:
 
 | Line | Value |
 |---|---|
-| `AGENT_DOMAIN` | `ijeoma.pro` |
-| `AGENT_ADMIN_EMAIL` | your address, for certificate notices |
 | `POSTGRES_PASSWORD` | a long random value, for example from `openssl rand -hex 32` |
 | `PERSONAL_AGENT_NAME` | the name to show in the app |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | one key per provider you use |
@@ -99,15 +101,40 @@ Add a `fallback:` line to a tier once a second provider's key is on the server.
 ./deploy/deploy.sh
 ```
 
-The script builds the image, tests it against Postgres, and switches over if
-the test passes. It ends with "api is healthy".
+The script builds the image, tests it against Postgres, and starts the
+database and the app if the test passes. It ends with "api is healthy". It
+starts no web server and touches no port but 8100 on this machine.
 
-## 9. Confirm
+```bash
+curl -s http://127.0.0.1:8100/health
+```
 
-- `https://ijeoma.pro/health` shows `{"ok":true}`. The first visit can take a
-  minute while Caddy obtains the certificate.
+That prints `{"ok":true}`.
+
+## 9. Add the nginx site and its certificate
+
+```bash
+cp /opt/personal-agent/deploy/nginx-ijeoma.pro.conf /etc/nginx/sites-available/ijeoma.pro
+ln -s /etc/nginx/sites-available/ijeoma.pro /etc/nginx/sites-enabled/ijeoma.pro
+nginx -t
+```
+
+`nginx -t` checks every site's configuration and changes nothing. Go on only
+if it reports the test is successful.
+
+```bash
+systemctl reload nginx
+certbot --nginx -d ijeoma.pro -d www.ijeoma.pro
+```
+
+A reload keeps the other sites up. certbot obtains the certificate and edits
+this one site to serve HTTPS; choose the redirect to HTTPS if it asks.
+
+Confirm:
+
+- `https://ijeoma.pro/health` shows `{"ok":true}`.
 - `https://ijeoma.pro` shows the sign-in page. Sign in with your password and a
-  code from the authenticator app.
+  code from the authenticator app. Sign-in works over HTTPS and not before.
 - Settings and cost lists your model routes.
 
 ## 10. Schedule the three jobs

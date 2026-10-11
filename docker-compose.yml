@@ -47,17 +47,25 @@ services:
       postgres:
         condition: service_healthy
     networks: [internal]
-    # Not published: Caddy is the single entry point.
+    # Reachable from this server only, never from the internet. The server's own
+    # web server (nginx on this VPS) passes ijeoma.pro to it; see
+    # deploy/nginx-ijeoma.pro.conf.
+    ports:
+      - "127.0.0.1:${API_PORT:-8100}:8000"
 
+  # Caddy is for a server with nothing else on ports 80 and 443. This VPS serves
+  # several domains through its own nginx, so Caddy stays off: it starts only
+  # with `docker compose --profile caddy up -d`.
   caddy:
+    profiles: ["caddy"]
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     environment:
-      AGENT_DOMAIN: ${AGENT_DOMAIN:?set in .env on the server}
-      AGENT_ADMIN_EMAIL: ${AGENT_ADMIN_EMAIL:?set in .env on the server}
+      AGENT_DOMAIN: ${AGENT_DOMAIN:-}
+      AGENT_ADMIN_EMAIL: ${AGENT_ADMIN_EMAIL:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

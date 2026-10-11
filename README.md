@@ -68,7 +68,10 @@ this repository implements **Delivery phase 1: Foundation**.
   Display and Inter, SIL Open Font License) ship in `api/static/fonts` and load
   from this server; the pages call no outside host.
 - **Going live** — `deploy/go-live.md` is the checklist for ijeoma.pro on the
-  Hostinger VPS.
+  Hostinger VPS. That server's own nginx holds ports 80 and 443 for several
+  domains, so the app listens on `127.0.0.1:8100` and one nginx site
+  (`deploy/nginx-ijeoma.pro.conf`) passes ijeoma.pro to it. Caddy is an
+  optional compose profile for a server with those ports free.
 - **Restricted clients** — a client marked restricted on `/files` has its runs
   limited to the providers listed in `config/providers.yaml` as approved for
   confidential work. The check is in the model gateway: a model from any other
