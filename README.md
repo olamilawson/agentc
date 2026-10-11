@@ -44,7 +44,10 @@ this repository implements **Delivery phase 1: Foundation**.
   times through Microsoft Graph and proposes two free times for a call, picked
   in code inside the hours in `config/calendar.yaml` (provisional values). It
   reads the calendar again before sending. Without a calendar connection the
-  reply asks the sender for dates. It creates no calendar event.
+  reply asks the sender for dates. When the sender's answer picks one of the
+  two times, the queue shows a calendar event to approve; approving creates it
+  and Microsoft sends the invitation. An answer that picks neither is
+  escalated. The agent changes and cancels no event.
 - **Sign-in** — one owner, a password and a one-time code from an
   authenticator app (`src/personal_agent/auth.py`). With the three login
   secrets set, every route needs a session except `/health`, `/login` and the

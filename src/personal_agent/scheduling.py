@@ -28,6 +28,8 @@ class CalendarPolicy(BaseModel):
     call_minutes: int = 30
     earliest_days_ahead: int = 2  # never propose today or tomorrow
     look_ahead_days: int = 14
+    # Ask Microsoft to attach a Teams meeting to an event the agent creates.
+    online_meeting: bool = False
 
 
 def _clock(text: str) -> time:

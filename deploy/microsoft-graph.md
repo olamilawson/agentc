@@ -1,8 +1,8 @@
 # Connecting the mailbox through Microsoft Graph
 
 The agent sends approved replies from one Outlook mailbox, reads earlier mail
-with a sender in that mailbox, and reads free and busy times from your
-calendar so a reply can propose a call. It signs in as a registered application,
+with a sender in that mailbox, reads free and busy times from your calendar so a reply can propose a call,
+and creates the calendar event once the sender picks a time and you approve. It signs in as a registered application,
 with no person's password. A tenant administrator does steps 1 to 4; you do
 steps 5 to 7 on the server.
 
@@ -31,7 +31,8 @@ type, and choose:
 
 - `Mail.ReadWrite`: read mail and build the reply as a draft
 - `Mail.Send`: send it
-- `Calendars.Read`: read free and busy times
+- `Calendars.ReadWrite`: read free and busy times, and create the event for
+  an agreed call
 
 Then choose Grant admin consent.
 
@@ -128,12 +129,34 @@ mail to `https://ijeoma.pro/hooks/n8n/sponsorship` with the header
 - With no calendar connection, an unreadable calendar, or fewer than two free
   times, the reply asks the sender for dates.
 
+## How an agreed call becomes an event
+
+- A mail from a sender to whom the agent proposed call times takes a short
+  path. If the mail picks one of the two times, your queue shows the event:
+  its time, its subject and the one attendee. If it picks neither, the mail
+  comes to you as an escalation and the agent creates nothing.
+- Approving creates the event in your calendar, and Microsoft sends the
+  invitation. The attendee is the address the mail came from; text inside the
+  mail cannot add or change an attendee.
+- The agent reads the calendar again at approval. If the time has gone, it
+  creates nothing and says so; free the time and approve again, or reject
+  the item and answer the sender yourself.
+- A refusal from Microsoft returns the item to your queue. A dropped
+  connection during creation stops the run without a retry; check the
+  calendar before you do anything else.
+- One proposal becomes one event. A later mail from the same sender goes
+  through ordinary triage.
+- `online_meeting: true` in `config/calendar.yaml` asks Microsoft to attach a
+  Teams meeting. It needs a Teams licence on the calendar's mailbox. Without
+  it the invitation carries no link.
+
 ## Limits
 
 - One application holds read, draft and send. The gateway's approval rule is
   what keeps a send to approved content; the permissions alone do not.
-- The agent creates no calendar event. Once the sender picks a time, you add
-  the meeting yourself.
+- The agent changes and cancels no event. To move or cancel a call, use your
+  calendar.
+- The agent invites one attendee: the sender. Add colleagues in your calendar.
 - The agent knows no public holidays. Block them in your calendar and it
   will skip them.
 - Replies held in the local outbox before the connection existed stay there.

@@ -14,6 +14,14 @@ Yes when someone asks the company to fund, partner on, or lend its name to an
 event, programme, team, publication or cause. No for supplier pitches, job
 applications, media sales, customer complaints, newsletters and automated mail.
 
+## An answer to proposed call times
+
+When the inputs list offered call times, the mail may be the sender's answer
+to them. Give `chosen_time` when the mail accepts one of the offered times,
+and copy that time word for word from the inputs. Give null when the mail
+accepts none, asks for a different time, or accepts both without choosing.
+Do not work out a time of your own.
+
 ## Criteria
 
 Rate each from 1 to 5 on what the enquiry states. Score what is present; list

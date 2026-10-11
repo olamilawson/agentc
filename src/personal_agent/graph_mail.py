@@ -8,6 +8,9 @@ application that signs in as itself (client credentials). Two things use it:
   approved, and sends that draft. The recipient comes from the approved
   content, never from the original message's Reply-To header.
 - search_correspondence: the read-class lookup of earlier mail with a sender.
+- create_event: the release-class creation of a calendar event with an
+  attendee. Microsoft sends the invitation as soon as the event exists, so
+  the one call that creates it cannot be taken back.
 - busy_periods: the read-class lookup of when a calendar is busy. It asks for
   free and busy times only, so no meeting's subject or attendees reach the agent.
 
@@ -180,6 +183,44 @@ class GraphMail:
             for m in response.json().get("value", [])
         ]
 
+
+    # --- release: create an event with an attendee -------------------------------------------
+    def create_event(self, subject: str, start: datetime, end: datetime, attendee: str, note: str,
+                     transaction_id: str, online: bool = False) -> dict:
+        """Put the event in the calendar and invite the attendee. Microsoft sends
+        the invitation itself. transaction_id makes a repeat of the same request
+        return the same event instead of creating a second one."""
+        stamp = lambda moment: moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
+        event = {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": note},
+            "start": {"dateTime": stamp(start), "timeZone": "UTC"},
+            "end": {"dateTime": stamp(end), "timeZone": "UTC"},
+            "attendees": [{"emailAddress": {"address": attendee}, "type": "required"}],
+            "transactionId": transaction_id,
+        }
+        if online:
+            event.update({"isOnlineMeeting": True, "onlineMeetingProvider": "teamsForBusiness"})
+        try:
+            token = self._bearer()  # a failed sign-in is definite: nothing was created
+            made = self._http.post(
+                f"{GRAPH}/users/{quote(self.calendar)}/events", headers={"Authorization": f"Bearer {token}"}, json=event
+            )
+        except httpx.HTTPError as e:
+            raise UncertainOutcome(
+                f"the connection failed while Microsoft was creating the event ({type(e).__name__}); "
+                "the invitation may or may not have gone. Check the calendar before doing anything else"
+            ) from e
+        if made.status_code in (200, 201):
+            body = made.json()
+            return {"created": True, "via": "Microsoft Graph", "calendar": self.calendar, "attendee": attendee,
+                    "event_id": body.get("id"), "link": body.get("webLink")}
+        if made.status_code >= 500:
+            raise UncertainOutcome(
+                f"Microsoft answered {made.status_code} while creating the event; the invitation may or may "
+                "not have gone. Check the calendar before doing anything else"
+            )
+        raise GraphError(f"Microsoft Graph refused to create the event ({_reason(made)})")
 
     # --- read: when the calendar is busy ----------------------------------------------------
     def busy_periods(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:

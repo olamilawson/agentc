@@ -833,6 +833,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             approve = {
                 "send": "Approve and send this reply",
                 "acknowledge": "Acknowledge, send nothing",
+                "invite": "Approve and send this invitation",
                 "outline": "Approve outline and start the draft",
                 "save": "Approve and save this document",
             }.get(item.get("action"), "Approve and release this content")

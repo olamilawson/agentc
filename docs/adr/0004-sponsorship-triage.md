@@ -77,8 +77,28 @@ the agent) and `scheduling.py` picks two free times in code from the owner's
 preferences in `config/calendar.yaml`, which are provisional. Check reply
 fails a draft that does not state both times word for word. The calendar is
 read again before the send; a time that has gone sends the run back for new
-times, a new draft and a new approval. Creating the calendar event (a
-release-class tool in the PRD) is not built: no step of the graph reaches it.
+times, a new draft and a new approval.
+
+## Update, 2026-10-11: an agreed call becomes a calendar event
+
+`create_calendar_event` is a release-class tool: creating an event with an
+attendee makes Microsoft send the invitation, so it needs an approval that
+matches the exact event, like a send.
+
+- A mail from a sender with an open proposal (a sent reply whose proposed
+  times are still ahead and not yet scheduled) skips scoring. Classify may
+  return one of the offered times word for word; code checks it against the
+  offer. A match goes to the owner as an event to approve; anything else is
+  escalated. Before this, such a mail was classed as not a sponsorship
+  request and dropped without notice.
+- Every field of the event comes from the agent's own earlier proposal and
+  the envelope sender. Nothing in the mail's text reaches it.
+- The calendar is read again before creation. Creation carries a
+  `transactionId` derived from the approved content, so Microsoft creates the
+  same event once even if the request repeats. A transport failure or 5xx is
+  still treated as uncertain and stops the run.
+- Changing and cancelling events are not built. The PRD lists "create or
+  change"; no step of any graph changes one.
 
 ## Other choices
 

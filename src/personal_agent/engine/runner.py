@@ -31,7 +31,7 @@ from personal_agent.engine.sponsorship_triage import (
     sponsorship_outputs,
 )
 from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
-from personal_agent.graph_mail import GraphMail, from_settings as graph_from_settings
+from personal_agent.graph_mail import GraphError, GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
 from personal_agent.harness.contract import StepContract, StepFailed
@@ -105,6 +105,9 @@ class Harness:
         self.tools.register(ToolSpec(name="send_mail", cls=ToolClass.RELEASE, fn=self._send_mail))
         # Read-class: earlier mail to or from an address in the connected mailbox.
         self.tools.register(ToolSpec(name="search_mail", cls=ToolClass.READ, fn=self._search_mail))
+        # Release-class: an event with an attendee. Creating it sends the invitation,
+        # so it needs an approval matching the exact event, like any send.
+        self.tools.register(ToolSpec(name="create_calendar_event", cls=ToolClass.RELEASE, fn=self._create_event))
         # Read-class: when the owner's calendar is busy. Free and busy times only.
         self.tools.register(ToolSpec(name="read_calendar", cls=ToolClass.READ, fn=self._read_calendar))
         # Draft-class: a document in the run's own client folder (reversible).
@@ -159,6 +162,17 @@ class Harness:
         if self.mail is None:
             return {"connected": False, "messages": []}
         return {"connected": True, "messages": self.mail.search_correspondence(payload["address"])}
+
+    def _create_event(self, payload: dict) -> dict:
+        if self.mail is None:
+            raise GraphError("there is no calendar connection")
+        return self.mail.create_event(
+            payload["subject"], datetime.fromisoformat(payload["start"]), datetime.fromisoformat(payload["end"]),
+            payload["to"], payload["note"],
+            # The same approved event always carries the same id, so Microsoft creates it once.
+            transaction_id=content_hash(payload)[:36],
+            online=self.settings.calendar.online_meeting,
+        )
 
     def _read_calendar(self, payload: dict) -> dict:
         if self.mail is None:

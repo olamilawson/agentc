@@ -16,3 +16,6 @@ call_minutes: 30
 earliest_days_ahead: 2
 # How far ahead to look for a free time, in days.
 look_ahead_days: 14
+# Attach a Teams meeting to a call the agent schedules. Needs a Teams licence
+# on the calendar's mailbox; leave false and the invitation carries no link.
+online_meeting: false
