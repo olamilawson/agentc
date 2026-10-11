@@ -1,0 +1,10 @@
+# Providers the owner has approved for confidential work (PRD: client separation).
+#
+# A client marked restricted may only be sent to these. The name is the part of
+# a model id before the slash in config/route_table.yaml: "anthropic" for
+# anthropic/claude-..., "openai" for openai/gpt-....
+#
+# Empty: no provider is approved yet, so a restricted client's runs stop at
+# their first model step with that reason. The owner fills this in, with
+# counsel, once each provider's data-use and retention terms are confirmed.
+approved_for_confidential: []

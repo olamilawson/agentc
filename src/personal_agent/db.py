@@ -134,6 +134,15 @@ client_settings = Table(
     Column("updated_at", String),
 )
 
+# Clients whose runs may only reach providers approved for confidential work.
+# A row means restricted; no row means not.
+restricted_clients = Table(
+    "restricted_clients",
+    metadata,
+    Column("name", String, primary_key=True),
+    Column("since", String),
+)
+
 # The trace of a run (PRD: tracing in run tables). One row each time a graph
 # node finishes, fails or stops to wait for the owner, in order.
 run_steps = Table(
@@ -332,6 +341,23 @@ class Database:
     def forget_client_settings(self, client: str) -> None:
         with self.engine.begin() as cx:
             cx.execute(delete(client_settings).where(client_settings.c.name == client))
+            cx.execute(delete(restricted_clients).where(restricted_clients.c.name == client))
+
+    def is_restricted(self, client: str) -> bool:
+        with self.engine.connect() as cx:
+            return cx.execute(
+                select(restricted_clients.c.name).where(restricted_clients.c.name == client)
+            ).first() is not None
+
+    def set_restricted(self, client: str, restricted: bool) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(restricted_clients).where(restricted_clients.c.name == client))
+            if restricted:
+                cx.execute(insert(restricted_clients).values(name=client, since=now()))
+
+    def restricted_client_names(self) -> set[str]:
+        with self.engine.connect() as cx:
+            return {row[0] for row in cx.execute(select(restricted_clients.c.name))}
 
     def list_runs_for_client(self, client: str) -> list[dict]:
         with self.engine.connect() as cx:

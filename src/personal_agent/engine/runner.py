@@ -168,7 +168,13 @@ class Harness:
                 run_id, {**entry, "input": tracing.clip(entry["input"]), "output": tracing.clip(entry["output"])}
             )
 
-        return NodeRunner(self.gateway, tracker, record)
+        # A restricted client's material goes only to providers approved for
+        # confidential work. Read at every call, so setting the flag takes
+        # effect on a run already under way.
+        run = self.db.get_run(run_id)
+        restricted = bool(run) and self.db.is_restricted(run["client"])
+        providers = set(self.settings.confidential_providers) if restricted else None
+        return NodeRunner(self.gateway, tracker, record, providers)
 
 
 def default_contracts() -> dict[str, StepContract]:

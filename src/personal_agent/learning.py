@@ -95,11 +95,23 @@ def gather_evidence(db: Database, since: str, until: str) -> dict[str, dict]:
     def bucket(workflow: str) -> dict:
         return evidence.setdefault(workflow, {"edits": [], "comments": []})
 
+    # The review pools clients in one model call, so a restricted client's
+    # material is left out of it altogether.
+    restricted = db.restricted_client_names()
+
+    def is_restricted(run_id: str) -> bool:
+        run = db.get_run(run_id)
+        return bool(run) and run["client"] in restricted
+
     for edit in db.owner_edits_between(since, until):
+        if is_restricted(edit["run_id"]):
+            continue
         bucket(edit["workflow"])["edits"].append({
             "run_id": edit["run_id"], "stage": edit["stage"], "diff": _diff(edit["before"], edit["after"]),
         })
     for decision in db.approvals_between(since, until):
+        if decision["client"] in restricted:
+            continue
         if decision["decision"] in ("sent_back", "rejected") and (decision["comment"] or "").strip():
             bucket(decision["workflow"])["comments"].append({
                 "run_id": decision["run_id"], "decision": decision["decision"], "comment": decision["comment"],

@@ -8,15 +8,24 @@ from typing import Callable
 
 from personal_agent.harness.budgets import BudgetTracker
 from personal_agent.harness.contract import OutputInvalid, StepContract, StepFailed
-from personal_agent.harness.models import ModelGateway, ProviderError
+from personal_agent.harness.models import ModelGateway, ProviderError, ProviderNotApproved
 
 
 class NodeRunner:
-    def __init__(self, gateway: ModelGateway, tracker: BudgetTracker, record: Callable[[dict], None] | None = None):
-        """record: called once per model call with what the trace keeps of it."""
+    def __init__(
+        self,
+        gateway: ModelGateway,
+        tracker: BudgetTracker,
+        record: Callable[[dict], None] | None = None,
+        providers: set[str] | None = None,
+    ):
+        """record: called once per model call with what the trace keeps of it.
+        providers: set for a restricted client; the only providers a call may reach."""
         self.gateway = gateway
         self.tracker = tracker
         self.record = record
+        self.providers = providers
+        self.fallback_used = False  # set when any call here was answered by a tier's fallback model
 
     def run(
         self,
@@ -45,13 +54,15 @@ class NodeRunner:
                 )
             result: dict = {}
             output = None
+            # Page images, when a step has them, and a restricted client's provider
+            # limit go with every attempt.
+            extra: dict = {}
+            if images:
+                extra["images"] = images
+            if self.providers is not None:
+                extra["providers"] = self.providers
             try:
-                # Page images, when a step has them, go with every attempt.
-                result = (
-                    self.gateway.complete(contract, body, images=images)
-                    if images
-                    else self.gateway.complete(contract, body)
-                )
+                result = self.gateway.complete(contract, body, **extra)
                 output = contract.validate_output(result["data"])
                 outcome, error_text = "ok", None
             except OutputInvalid as e:  # unparseable JSON or schema violation both retry once
@@ -61,6 +72,10 @@ class NodeRunner:
             except ProviderError as e:
                 self._record(contract, attempt, validated_input, {}, None, "provider error", str(e))
                 raise
+            except ProviderNotApproved as e:
+                self._record(contract, attempt, validated_input, {}, None, "refused: provider not approved", str(e))
+                raise
+            self.fallback_used = self.fallback_used or bool(result.get("fallback_used"))
             usage = result.get("usage") or {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
             self._record(
                 contract, attempt, validated_input, result, output if outcome == "ok" else result.get("data"),

@@ -9,11 +9,19 @@ that replays recorded responses, so tests never call a provider.
 from __future__ import annotations
 
 from personal_agent.config import TierRoute
-from personal_agent.harness.contract import StepContract
+from personal_agent.harness.contract import StepContract, StepFailed
 
 
 class ProviderError(Exception):
     pass
+
+
+class ProviderNotApproved(StepFailed):
+    """A restricted client's material may not go to any model this tier routes to."""
+
+
+def provider_of(model: str) -> str:
+    return model.split("/", 1)[0].lower()
 
 
 class ModelGateway:
@@ -21,23 +29,41 @@ class ModelGateway:
         self.route_table = route_table
 
     def complete(
-        self, contract: StepContract, context: str, images: list[tuple[str, bytes]] | None = None
+        self,
+        contract: StepContract,
+        context: str,
+        images: list[tuple[str, bytes]] | None = None,
+        providers: set[str] | None = None,
     ) -> dict:
         """Returns {"data": <parsed json>, "model": str, "fallback_used": bool,
         "usage": {"tokens_in": int, "tokens_out": int, "cost_usd": float}}.
 
         images: (label, JPEG bytes) pairs sent with the request, each preceded
         by its label so the model can cite the page it is looking at.
+
+        providers: for a restricted client, the only providers the call may go
+        to. The route's models outside that set are never called; if the
+        primary is one of them the named fallback is used and shown as such.
         """
         route = self.route_table[contract.tier]
-        try:
-            return self._call(route.primary, contract, context, False, images)
-        except ProviderError:
-            if not route.fallback:
-                raise
-            result = self._call(route.fallback, contract, context, True, images)
-            result["fallback_used"] = True
-            return result
+        models = [(route.primary, False)] + ([(route.fallback, True)] if route.fallback else [])
+        if providers is not None:
+            models = [(m, fallback) for m, fallback in models if provider_of(m) in providers]
+            if not models:
+                named = " or ".join(m for m in (route.primary, route.fallback) if m)
+                raise ProviderNotApproved(
+                    f"node '{contract.node}' was not run: the client is restricted and the "
+                    f"{contract.tier} tier routes only to {named}, which is not approved for confidential work"
+                )
+        for position, (model, fallback) in enumerate(models):
+            try:
+                result = self._call(model, contract, context, fallback, images)
+                result["fallback_used"] = fallback
+                return result
+            except ProviderError:
+                if position == len(models) - 1:
+                    raise
+        raise AssertionError("unreachable: a route always names a primary model")
 
     def _call(
         self,
@@ -111,7 +137,11 @@ class RecordedGateway(ModelGateway):
         self.used_fallback = False
 
     def complete(
-        self, contract: StepContract, context: str, images: list[tuple[str, bytes]] | None = None
+        self,
+        contract: StepContract,
+        context: str,
+        images: list[tuple[str, bytes]] | None = None,
+        providers: set[str] | None = None,  # a recording has no provider to restrict
     ) -> dict:
         queue = self._responses.get(contract.node)
         if not queue:

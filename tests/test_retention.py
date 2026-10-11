@@ -155,7 +155,7 @@ def test_api_and_page_set_retention_and_require_the_name_to_delete(settings):
 
     assert client.post("/clients/acme/retention", data={"days": "90"}).json()["retention_days"] == 90
     assert client.get("/clients/acme").json() == {
-        "client": "acme", "files": 1, "bytes": len(BRIEF), "runs": 0, "retention_days": 90,
+        "client": "acme", "files": 1, "bytes": len(BRIEF), "runs": 0, "retention_days": 90, "restricted": False,
     }
     assert client.post("/clients/acme/retention", data={"days": ""}).json()["retention_days"] is None
     assert client.post("/clients/acme/retention", json={"days": 0}).status_code == 400

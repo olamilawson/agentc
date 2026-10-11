@@ -82,7 +82,8 @@ def build_test_graph(h):
             [("brief", (state["inputs"] or {}).get("context_notes", ""))],
             {"client": state["client"], "objective": (state["inputs"] or {}).get("objective", "")},
         )
-        out = h.node_runner(tracker, state["run_id"]).run(
+        runner = h.node_runner(tracker, state["run_id"])
+        out = runner.run(
             h.contracts["draft"],
             {
                 "objective": (state["inputs"] or {}).get("objective", ""),
@@ -99,7 +100,7 @@ def build_test_graph(h):
                 "tokens_out": tracker.tokens_out,
                 "cost_usd": tracker.cost_usd,
             },
-            "fallback_used": getattr(h.gateway, "used_fallback", False),
+            "fallback_used": runner.fallback_used,
         }
 
     # The owner's approval is the only step that releases a reply.

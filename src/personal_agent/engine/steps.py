@@ -29,14 +29,14 @@ def run_model(
     context, _ = build_context(
         ROLE, rubric, examples or [], untrusted, {k: v for k, v in payload.items() if k not in hide}
     )
-    out = h.node_runner(tracker, state.get("run_id")).run(
-        h.contracts[node], payload, context=context, images=images
-    )
+    runner = h.node_runner(tracker, state.get("run_id"))
+    out = runner.run(h.contracts[node], payload, context=context, images=images)
     return out, {
         "usage": {
             "tokens_in": tracker.tokens_in,
             "tokens_out": tracker.tokens_out,
             "cost_usd": tracker.cost_usd,
         },
-        "fallback_used": state.get("fallback_used", False) or getattr(h.gateway, "used_fallback", False),
+        # The run record shows when a tier's fallback model answered any step.
+        "fallback_used": state.get("fallback_used", False) or runner.fallback_used,
     }

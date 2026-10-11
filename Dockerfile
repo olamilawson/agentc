@@ -13,6 +13,7 @@ ENV PERSONAL_AGENT_ROUTE_TABLE=/app/config/route_table.yaml \
     PERSONAL_AGENT_BUDGETS=/app/config/budgets.yaml \
     PERSONAL_AGENT_SPONSORSHIP=/app/config/sponsorship.yaml \
     PERSONAL_AGENT_CREATIVE_REVIEW=/app/config/creative_review.yaml \
+    PERSONAL_AGENT_PROVIDERS=/app/config/providers.yaml \
     PERSONAL_AGENT_SKILLS_DIR=/app/skills \
     PERSONAL_AGENT_CLIENTS_DIR=/app/data/clients \
     PERSONAL_AGENT_CHECKPOINT_DB=/app/data/checkpoints.sqlite

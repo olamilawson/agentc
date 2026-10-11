@@ -328,6 +328,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             "bytes": sum(f["size"] for f in files),
             "runs": len(db.list_runs_for_client(name)),
             "retention_days": db.get_retention_days(name),
+            "restricted": db.is_restricted(name),
         }
 
     async def _fields(request: Request) -> dict:
@@ -354,6 +355,26 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         except ValueError as e:
             raise HTTPException(400, str(e))
 
+    @app.post("/clients/{name}/restricted")
+    async def set_client_restricted(name: str, request: Request) -> dict:
+        # restricted: this client's runs may only reach providers approved for confidential work.
+        raw = (await _fields(request)).get("restricted")
+        if isinstance(raw, str):
+            raw = raw.strip().lower()
+        if raw not in (True, False, "true", "false", "on", "off", "1", "0"):
+            raise HTTPException(400, "send restricted as true or false")
+        restricted = raw in (True, "true", "on", "1")
+        try:
+            scope = engine.harness.clients.scope(name)
+        except KeyError:
+            raise HTTPException(404, f"unknown client {name!r}")
+        db.set_restricted(scope.name, restricted)
+        db.audit(None, "client_restricted_set", {"client": scope.name, "restricted": restricted})  # a configuration change
+        return {
+            "client": scope.name, "restricted": restricted,
+            "approved_providers": settings.confidential_providers,
+        }
+
     @app.post("/retention/apply")
     def apply_retention() -> list[dict]:
         # Removes what is past each client's period now; the daily job does the same.
@@ -372,6 +393,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     @app.get("/files", response_class=HTMLResponse)
     def clients_page() -> str:
         cards = []
+        approved = (
+            escape(", ".join(settings.confidential_providers))
+            if settings.confidential_providers
+            else "no provider yet (none is approved for confidential work, so its runs stop at the first model step)"
+        )
         for name in engine.harness.clients.list_clients():
             c = _client_view(name)
             kept = "until you delete the client" if c["retention_days"] is None else f"{c['retention_days']} days"
@@ -381,6 +407,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                   <p class="meta">{c["files"]} files · {c["bytes"] / 1024:.0f} KB · {c["runs"]} runs · kept {kept}</p>
                   <form method="post" action="/clients/{escape(name)}/files" enctype="multipart/form-data">
                     <input type="file" name="file"/> <button>Upload</button>
+                  </form>
+                  <form method="post" action="/clients/{escape(name)}/restricted">
+                    <input type="hidden" name="restricted" value="{"false" if c["restricted"] else "true"}"/>
+                    <span>{"<strong>Restricted</strong>: its runs reach only " + approved if c["restricted"]
+                           else "Not restricted: its runs may reach any provider in the route table"}</span>
+                    <button>{"Lift the restriction" if c["restricted"] else "Mark as restricted"}</button>
                   </form>
                   <form method="post" action="/clients/{escape(name)}/retention">
                     <label>Keep for <input type="number" name="days" min="1" size="5"
@@ -619,6 +651,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <tr><td>Mail watcher webhook</td><td>{"on" if settings.n8n_secret else "off (no shared secret set)"}</td></tr>
 <tr><td>Creative review</td><td>images up to {settings.creative_review.image_max_edge} px,
  {settings.creative_review.pages_per_group} pages a call, {settings.creative_review.max_pages} pages at most</td></tr>
+<tr><td>Approved for confidential work</td><td>{escape(", ".join(settings.confidential_providers)) or "no provider yet"}
+ <span class="meta">(<code>config/providers.yaml</code>; restricted clients are marked on the <a href="/files">Clients</a> page)</span></td></tr>
 <tr><td>Retention per client</td><td>set for each client on the <a href="/files">Clients</a> page</td></tr>
 </table>
 <p class="meta">These are read from the files in <code>config/</code> and the server environment.

@@ -59,6 +59,8 @@ class Settings(BaseModel):
     # Shared secret for the n8n webhook; None disables the webhook.
     n8n_secret: str | None = None
     creative_review: CreativeReviewSettings = CreativeReviewSettings()
+    # Providers approved for confidential work; a restricted client's runs use only these.
+    confidential_providers: list[str] = []
 
 
 def load_settings() -> Settings:
@@ -84,7 +86,10 @@ def load_settings() -> Settings:
         os.environ.get("PERSONAL_AGENT_CREATIVE_REVIEW", REPO_ROOT / "config" / "creative_review.yaml")
     )
     creative = CreativeReviewSettings(**(yaml.safe_load(creative_path.read_text()) if creative_path.exists() else {}))
+    providers_path = Path(os.environ.get("PERSONAL_AGENT_PROVIDERS", REPO_ROOT / "config" / "providers.yaml"))
+    providers = (yaml.safe_load(providers_path.read_text()) or {}) if providers_path.exists() else {}
     return Settings(
+        confidential_providers=[str(p).lower() for p in providers.get("approved_for_confidential") or []],
         creative_review=creative,
         sponsorship=policy,
         n8n_secret=os.environ.get("PERSONAL_AGENT_N8N_SECRET") or None,
