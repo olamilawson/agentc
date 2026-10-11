@@ -86,13 +86,12 @@ on your phone, and store a copy of the key somewhere safe.
 
 ## 7. Check the model routes
 
-`config/route_table.yaml` still holds placeholder model names. Replace each
-with a model your provider keys can call, commit, and push. A run fails at its
-first model step if a name is wrong or a key is missing.
+`config/route_table.yaml` points all three tiers at OpenAI and names no
+fallback. Its model names have not been checked against your account. Confirm
+that your key can call each one, correct any that it cannot, commit, and push.
+A run fails at its first model step if a name is wrong or the key is missing.
 
-With one provider's key and no other, point each tier's primary at that
-provider. A tier whose primary belongs to a provider with no key fails that
-call first, then answers from its fallback, on each model step.
+Add a `fallback:` line to a tier once a second provider's key is on the server.
 
 ## 8. Deploy
 

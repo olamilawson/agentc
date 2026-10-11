@@ -1,13 +1,18 @@
 # Model route table — tiers map to providers; changing a model never changes code.
-# Placeholder model ids: confirm current versions and terms per provider before
-# connecting it (PRD: model routing and cost). The fallback is used only on
-# provider error, and the run record shows when it did.
+#
+# All three tiers point at OpenAI for now (owner's instruction, 2026-10-11): the
+# OpenAI key is the first to arrive. The model names are the ones this file
+# already carried and have not been checked against the account's model list;
+# confirm them once the key is in (PRD: model routing and cost).
+#
+# No fallback is named yet. A fallback is used only on provider error, and one
+# that points at a provider with no key would fail too and report its own
+# error in place of the real one. Add `fallback:` lines when a second
+# provider's key is on the server, for example:
+#   fallback: anthropic/claude-sonnet-4-5
 cheap:
   primary: openai/gpt-5-mini
-  fallback: anthropic/claude-haiku-4-5
 standard:
   primary: openai/gpt-5
-  fallback: anthropic/claude-sonnet-4-5
 strong:
-  primary: anthropic/claude-opus-4-5
-  fallback: openai/gpt-5
+  primary: openai/gpt-5
