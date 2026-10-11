@@ -31,6 +31,14 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Strategy drafting graph** — intake (goal and source documents) → questions
+  (up to five; the run waits for input) → outline → **owner approves the
+  outline** → draft one section at a time → critique (figures in code, then a
+  separate model call) → revise, twice at most → **owner review** → save to the
+  client folder. At either pause the owner approves, edits then approves, or
+  sends it back with a comment for a new pass; the difference between a draft
+  and the approved version is recorded (`GET /runs/{id}/edits`). Templates and
+  the writing standard are provisional. See `docs/adr/0006-strategy-drafting.md`.
 - **Creative review graph** — receive files (work, brief, calibration examples)
   → render pages (PDFium; images and text, no model) → score by brief (strong,
   with the page images, in groups) → write feedback (standard, for a designer
@@ -90,6 +98,15 @@ curl -s localhost:8000/clients/demo/files -F file=@brief.pdf
 curl -s localhost:8000/runs -X POST -H 'content-type: application/json' \
   -d '{"workflow":"brief-evaluation","client":"demo","inputs":{"brief_path":"brief.pdf"}}'
 # or: "inputs":{"brief_text":"..."}
+```
+
+Draft a strategy document (`document_type` is `strategy`, `brief` or `memo`;
+leave out `source_paths` to read the whole client folder). If the run asks
+questions, answer at `/queue` or `POST /runs/<run_id>/input`:
+
+```bash
+curl -s localhost:8000/runs -X POST -H 'content-type: application/json' \
+  -d '{"workflow":"strategy-drafting","client":"demo","inputs":{"goal":"A go-to-market strategy for the SME account","document_type":"strategy","source_paths":["research.pdf"]}}'
 ```
 
 Review creative work against its brief (both already uploaded to the client
@@ -153,9 +170,9 @@ afterwards. The container is thrown away, so pytest does not stay in the image.
    owner's criteria, thresholds and amount limit; the Microsoft Graph
    application (read mail and calendar, Outlook drafts, send); the n8n watcher
    itself; an owner-scored evaluation set.
-3. Creative review and drafting: the creative review graph exists. Still owed:
-   the owner's rubric validation and calibration examples, an owner-scored
-   evaluation set that includes design work, a live run with images, and the
-   strategy drafting graph.
+3. Creative review and drafting: both graphs exist. Still owed: the owner's
+   validation of the rubric, templates and writing standard; calibration
+   examples; an owner-scored creative set that includes design work; live runs
+   of both; and, for drafting, enough approved documents to read an edit rate.
 4. Learning and tools: weekly review of owner edits, skill-library diffs,
    Canva/Higgsfield via MCP, cost screens.

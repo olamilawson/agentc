@@ -123,6 +123,21 @@ outbox = Table(
 )
 
 
+# What the owner changed before approving: the draft and the approved version.
+# The weekly learning review reads these; nothing else acts on them.
+owner_edits = Table(
+    "owner_edits",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("run_id", String, index=True),
+    Column("workflow", String, index=True),
+    Column("stage", String),
+    Column("before", String),
+    Column("after", String),
+    Column("created_at", String),
+)
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -226,6 +241,23 @@ class Database:
                 .first()
             )
         return dict(row) if row else None
+
+    # --- owner edits (for the learning loop) -------------------------------------
+    def record_owner_edit(self, run_id: str, workflow: str, stage: str | None, before: str, after: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(
+                insert(owner_edits).values(
+                    id=new_id(), run_id=run_id, workflow=workflow, stage=stage,
+                    before=before, after=after, created_at=now(),
+                )
+            )
+
+    def list_owner_edits(self, run_id: str | None = None) -> list[dict]:
+        stmt = select(owner_edits).order_by(owner_edits.c.created_at)
+        if run_id:
+            stmt = stmt.where(owner_edits.c.run_id == run_id)
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(stmt).mappings()]
 
     # --- sponsorship ledger ----------------------------------------------------
     def create_ledger_row(self, run_id: str, **fields) -> str:

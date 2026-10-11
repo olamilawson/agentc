@@ -27,6 +27,7 @@ from personal_agent.engine.sponsorship_triage import (
     sponsorship_contracts,
     sponsorship_outputs,
 )
+from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
 from personal_agent.harness.contract import StepContract, StepFailed
@@ -82,6 +83,16 @@ class Harness:
         )
         self.tools.register(
             ToolSpec(name="render_client_file", cls=ToolClass.READ, fn=self._render_client_file)
+        )
+        self.tools.register(
+            ToolSpec(
+                name="list_client_files",
+                cls=ToolClass.READ,
+                fn=lambda payload: {
+                    "client": payload["client"],
+                    "files": self.clients.list_files(ClientScope(payload["client"])),
+                },
+            )
         )
         # Release-class mail. Microsoft Graph is not connected yet: an approved
         # message is held in the local outbox and reported as not sent. The Graph
@@ -189,6 +200,7 @@ class Workflow:
     build: Callable  # (Harness) -> StateGraph
     outputs: Callable[[dict], dict | None]  # graph state -> the run record's outputs
     on_rejected: Callable | None = None  # (db, run, comment) when the owner rejects
+    revises: bool = False  # a send-back resumes the graph with the owner's comment
 
 
 WORKFLOWS: dict[str, Workflow] = {
@@ -196,6 +208,7 @@ WORKFLOWS: dict[str, Workflow] = {
     "brief-evaluation": Workflow(build_brief_graph, brief_outputs),
     "sponsorship-triage": Workflow(build_sponsorship_graph, sponsorship_outputs, sponsorship_rejected),
     "creative-review": Workflow(build_creative_graph, creative_outputs),
+    "strategy-drafting": Workflow(build_drafting_graph, drafting_outputs, revises=True),
 }
 
 
@@ -247,6 +260,7 @@ class Engine:
             gateway=gateway or ModelGateway(settings.route_table),
             contracts={
                 **default_contracts(), **brief_contracts(), **sponsorship_contracts(), **creative_contracts(),
+                **drafting_contracts(),
             },
             skill_text=skills.get("foundation-test", ""),
             skills=skills,
@@ -276,37 +290,87 @@ class Engine:
         self._invoke(run_id, None, {"run_id": run_id, "client": client, "inputs": inputs})
         return run_id
 
-    def approve(self, run_id: str, decision: str, comment: str | None) -> dict:
+    def approve(self, run_id: str, decision: str, comment: str | None, edited_body: str | None = None) -> dict:
         run = self.db.get_run(run_id)
         if not run:
             raise KeyError(run_id)
         if run["status"] != "waiting_for_approval":
             raise ValueError(f"run {run_id} is {run['status']}, not waiting for approval")
+        workflow = WORKFLOWS[run["workflow"]]
 
         pending = self.pending_approval(run_id)
-        approval_id = self.db.record_approval(run_id, pending["content_hash"], decision, comment)
-        self.db.audit(run_id, "approval_recorded", {"decision": decision, "content_hash": pending["content_hash"]})
+        approved_hash = pending["content_hash"]
+        if edited_body is not None:
+            # Edit then approve: the approval is for the owner's version, and the
+            # difference from the draft is kept for the learning loop.
+            if decision != "approved" or not pending.get("editable"):
+                raise ValueError("only an editable item can be approved with edits")
+            before = pending["content"].get("body", "")
+            if edited_body == before:
+                edited_body = None
+            else:
+                approved_hash = content_hash({**pending["content"], "body": edited_body})
+                self.db.record_owner_edit(run_id, run["workflow"], pending.get("stage"), before, edited_body)
+        approval_id = self.db.record_approval(run_id, approved_hash, decision, comment)
+        self.db.audit(run_id, "approval_recorded", {
+            "decision": decision, "content_hash": approved_hash, "edited": edited_body is not None,
+        })
 
         if decision == "approved":
-            self._invoke(run_id, Command(resume={"approval_id": approval_id}), None)
+            resume = {"approval_id": approval_id}
+            if edited_body is not None:
+                resume["edited_body"] = edited_body
+            self._invoke(run_id, Command(resume=resume), None)
         elif decision == "rejected":
             self.db.update_run(run_id, status="cancelled", error_reason=f"rejected by owner: {comment}")
-            hook = WORKFLOWS[run["workflow"]].on_rejected
-            if hook:
-                hook(self.db, run, comment)
-        else:  # sent_back: comment recorded; a revision pass starts with the real workflows
+            if workflow.on_rejected:
+                workflow.on_rejected(self.db, run, comment)
+        else:
             self.db.audit(run_id, "sent_back", {"comment": comment})
+            if workflow.revises:  # a revision request starts a new pass with the owner's comment
+                self._invoke(run_id, Command(resume={"approval_id": approval_id}), None)
+        return self.db.get_run(run_id)
+
+    def provide_input(self, run_id: str, answers: str) -> dict:
+        """The owner's answers to a run that asked questions and is waiting."""
+        run = self.db.get_run(run_id)
+        if not run:
+            raise KeyError(run_id)
+        if run["status"] != "waiting_for_input":
+            raise ValueError(f"run {run_id} is {run['status']}, not waiting for input")
+        self.db.audit(run_id, "input_provided", {"answers": answers})
+        self._invoke(run_id, Command(resume={"answers": answers}), None)
         return self.db.get_run(run_id)
 
     # --- inspection ------------------------------------------------------------
-    def pending_approval(self, run_id: str) -> dict:
+    def _waiting_on(self, run_id: str) -> dict | None:
+        """What an interrupted run is waiting for: an approval or an input request."""
         snap = self._graph(run_id).get_state({"configurable": {"thread_id": run_id}})
         for task in snap.tasks:
             for intr in task.interrupts or ():
-                value = intr.value
-                if isinstance(value, dict) and value.get("type") == "approval":
-                    return value
-        raise ValueError(f"run {run_id} has no pending approval request")
+                if isinstance(intr.value, dict) and intr.value.get("type") in ("approval", "input"):
+                    return intr.value
+        return None
+
+    def pending_approval(self, run_id: str) -> dict:
+        value = self._waiting_on(run_id)
+        if not value or value["type"] != "approval":
+            raise ValueError(f"run {run_id} has no pending approval request")
+        return value
+
+    def input_requests(self) -> list[dict]:
+        items = []
+        for run in self.db.list_runs(status="waiting_for_input"):
+            try:
+                value = self._waiting_on(run["id"])
+            except ValueError:
+                continue
+            if value and value["type"] == "input":
+                items.append({
+                    "run_id": run["id"], "workflow": run["workflow"], "client": run["client"],
+                    "goal": value.get("goal", ""), "questions": value.get("questions", []),
+                })
+        return items
 
     def queue(self) -> list[dict]:
         items = []
@@ -326,13 +390,15 @@ class Engine:
                     # What approving does, and what the owner should know beside the content.
                     "action": pending.get("action", "release"),
                     "notes": pending.get("notes", []),
+                    "editable": pending.get("editable", False),
                 }
             )
         return items
 
     # --- internals ---------------------------------------------------------------
     def _invoke(self, run_id: str, command, start_state: dict | None) -> None:
-        config = {"configurable": {"thread_id": run_id}}
+        # A drafting run takes one graph step per section; every loop is bounded in the graph itself.
+        config = {"configurable": {"thread_id": run_id}, "recursion_limit": 80}
         graph = self._graph(run_id)
         self.db.update_run(run_id, status="running")
         try:
@@ -358,7 +424,8 @@ class Engine:
         if status_override:
             status, reason = status_override, error_reason
         elif snap.next:  # interrupted mid-graph: waiting on a human
-            status = "waiting_for_approval"
+            waiting = self._waiting_on(run_id)
+            status = "waiting_for_input" if waiting and waiting["type"] == "input" else "waiting_for_approval"
             reason = None
         else:
             status = "failed" if state.get("error") else "done"

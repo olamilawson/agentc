@@ -90,6 +90,17 @@ set cannot hold design work as text. The gate set needs the owner's real
 pieces, including layouts and decks, which means extending the item format to
 name files.
 
+## Strategy drafting has no set yet
+
+The PRD measures drafting by the owner's edit rate per section and by faults
+the critic missed that the owner found, and gates it on the edit rate falling
+over successive drafts. None of that can be read from a fixed set scored in
+advance: it needs documents the owner has actually edited and approved. The
+graph records the inputs (`owner_edits` holds each draft and its approved
+version; a finished run's outputs carry `edit_rate` per section). A set of
+real drafting tasks with the owner's approved documents, and a report over the
+recorded edits, are still to be built.
+
 ## Safety sets
 
 Two sets must pass in full (PRD: safety sets). Each exits 0 only when every

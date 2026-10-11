@@ -31,6 +31,12 @@ class RunCreate(BaseModel):
 class ApprovalDecision(BaseModel):
     decision: str = Field(pattern="^(approved|rejected|sent_back)$")
     comment: str | None = Field(default=None, max_length=4000)
+    # Edit then approve: the owner's version of the body, for items that allow it.
+    edited_body: str | None = Field(default=None, max_length=400_000)
+
+
+class OwnerInput(BaseModel):
+    answers: str = Field(min_length=1, max_length=20_000)
 
 
 class ClientCreate(BaseModel):
@@ -183,13 +189,39 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             body = ApprovalDecision(
                 decision=str(form.get("decision", "")),
                 comment=(str(form["comment"]) if form.get("comment") else None),
+                # A browser posts a textarea with CRLF line ends; the content uses LF.
+                edited_body=(str(form["edited_body"]).replace("\r\n", "\n") if "edited_body" in form else None),
             )
         try:
-            return engine.approve(run_id, body.decision, body.comment)
+            return engine.approve(run_id, body.decision, body.comment, body.edited_body)
         except KeyError:
             raise HTTPException(404, "run not found")
         except ValueError as e:
             raise HTTPException(409, str(e))
+
+    @app.get("/inputs/pending")
+    def pending_inputs() -> list[dict]:
+        return engine.input_requests()
+
+    @app.post("/runs/{run_id}/input")
+    async def give_input(run_id: str, request: Request) -> dict:
+        # The owner's answers to a run that asked questions and is waiting.
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = OwnerInput(**(await request.json()))
+        else:
+            form = await request.form()
+            body = OwnerInput(answers=str(form.get("answers", "")).replace("\r\n", "\n"))
+        try:
+            return engine.provide_input(run_id, body.answers)
+        except KeyError:
+            raise HTTPException(404, "run not found")
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/runs/{run_id}/edits")
+    def owner_edits(run_id: str) -> list[dict]:
+        # What the owner changed before approving, kept for the learning loop.
+        return db.list_owner_edits(run_id)
 
     @app.get("/queue", response_class=HTMLResponse)
     def queue_page() -> str:
@@ -206,7 +238,18 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             approve = {
                 "send": "Approve — send exactly this reply",
                 "acknowledge": "Acknowledge — nothing is sent",
+                "outline": "Approve this outline — start drafting",
+                "save": "Approve — save exactly this document",
             }.get(item.get("action"), "Approve — release exactly this content")
+            edit = (
+                f"""<details><summary>Edit, then approve</summary>
+                    <form method="post" action="/runs/{item["run_id"]}/approval" class="edit">
+                      <input type="hidden" name="decision" value="approved"/>
+                      <textarea name="edited_body" rows="16">{escape(content.get("body", ""))}</textarea>
+                      <button class="approve">Approve my edited version</button>
+                    </form></details>"""
+                if item.get("editable") else ""
+            )
             rows.append(
                 f"""
                 <section class="card">
@@ -217,6 +260,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                   {to}
                   <pre>{escape(content.get("body", ""))}</pre>
                   <p class="meta">content hash: <code>{item["content_hash"]}</code></p>
+                  {edit}
                   <div class="actions">
                     <form method="post" action="/runs/{item["run_id"]}/approval">
                       <input type="hidden" name="decision" value="approved"/>
@@ -235,6 +279,21 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                   </div>
                 </section>"""
             )
+        for ask in engine.input_requests():
+            questions = "".join(f"<li>{escape(str(q))}</li>" for q in ask["questions"])
+            rows.append(
+                f"""
+                <section class="card">
+                  <h2>Questions before drafting</h2>
+                  <p class="meta">run {ask["run_id"]} · {escape(ask["workflow"])} · client {escape(ask["client"])}</p>
+                  <p>{escape(ask["goal"])}</p>
+                  <ol>{questions}</ol>
+                  <form method="post" action="/runs/{ask["run_id"]}/input" class="edit">
+                    <textarea name="answers" rows="6" placeholder="Your answers"></textarea>
+                    <button class="approve">Send answers — continue to the outline</button>
+                  </form>
+                </section>"""
+            )
         listing = "".join(rows) or "<p>Nothing is waiting for your approval.</p>"
         return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><title>Approval queue — Personal Agent</title>
@@ -248,6 +307,9 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
  .error {{ color: #b3261e; font-weight: bold; margin: .5rem 0; }}
  .actions {{ display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }}
  form {{ display: flex; gap: .4rem; align-items: center; }}
+ form.edit {{ flex-direction: column; align-items: stretch; margin: .5rem 0; }}
+ textarea {{ width: 100%; box-sizing: border-box; font: inherit; padding: .5rem; }}
+ details {{ margin: .5rem 0; }}
  button {{ padding: .4rem .8rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
  .approve {{ background: #1a5c3f; color: #fff; }}
  .reject {{ background: #7a2c22; color: #fff; }}
