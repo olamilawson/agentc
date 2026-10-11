@@ -107,11 +107,12 @@ The image carries `config/` and `skills/` under `/app` and sets
 `PERSONAL_AGENT_ROUTE_TABLE`, `PERSONAL_AGENT_BUDGETS`,
 `PERSONAL_AGENT_SPONSORSHIP` and `PERSONAL_AGENT_SKILLS_DIR` to them, so a
 change to a route, budget, threshold or skill needs `docker compose up -d
---build`. Client folders and LangGraph checkpoints live in `./data` beside the
-compose file, mounted at `/app/data`; they survive rebuilds and are what
-`deploy/backup.sh` copies. App tables (runs, approvals, audit, ledger) are in
-Postgres. Checkpoints stay on SQLite in deployment for now: the Postgres
-checkpointer named in ADR 0001 is installed in the image but not wired.
+--build`. Client folders live in `./data` beside the compose file, mounted at
+`/app/data`; they survive rebuilds and are what `deploy/backup.sh` copies. App
+tables (runs, approvals, audit, ledger) and LangGraph checkpoints are in
+Postgres: when `PERSONAL_AGENT_DATABASE_URL` is a Postgres URL the engine uses
+the Postgres checkpointer and creates its tables at startup; with a SQLite URL
+(local development, tests) it uses the SQLite checkpoint file.
 
 ## Next phases (PRD delivery order)
 

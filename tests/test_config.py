@@ -35,3 +35,17 @@ def test_every_repo_relative_path_can_be_set_from_the_environment(tmp_path, monk
 def test_skills_dir_defaults_to_the_repository(monkeypatch):
     monkeypatch.delenv("PERSONAL_AGENT_SKILLS_DIR", raising=False)
     assert load_settings().skills_dir == REPO_ROOT / "skills"
+
+
+def test_checkpoints_follow_the_database(settings):
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from personal_agent.engine.runner import open_checkpointer, postgres_conninfo
+
+    assert postgres_conninfo(settings.database_url) is None
+    assert isinstance(open_checkpointer(settings), SqliteSaver)
+    # The compose file's SQLAlchemy URL, as libpq wants it; the password stays encoded.
+    assert (
+        postgres_conninfo("postgresql+psycopg://personal_agent:p%40ss@postgres:5432/personal_agent")
+        == "postgresql://personal_agent:p%40ss@postgres:5432/personal_agent"
+    )

@@ -13,6 +13,7 @@ from typing import Callable
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
+from sqlalchemy.engine import make_url
 
 from personal_agent.clients import ClientScope, ClientStore, parse_document
 from personal_agent.config import Settings
@@ -169,6 +170,39 @@ class UnknownWorkflow(ValueError):
     pass
 
 
+def postgres_conninfo(database_url: str) -> str | None:
+    """The libpq form of a SQLAlchemy Postgres URL; None for any other database."""
+    url = make_url(database_url)
+    if url.get_backend_name() != "postgresql":
+        return None
+    return url.set(drivername="postgresql").render_as_string(hide_password=False)
+
+
+def open_checkpointer(settings: Settings):
+    """LangGraph checkpoints sit beside the app tables: in Postgres when the
+    database is Postgres (the VPS), otherwise in the SQLite checkpoint file."""
+    conninfo = postgres_conninfo(settings.database_url)
+    if conninfo is None:
+        conn = sqlite3.connect(settings.checkpoint_path, check_same_thread=False)
+        return SqliteSaver(conn)
+    # Imported here: these come with the deploy extra, which local runs do not need.
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    pool = ConnectionPool(
+        conninfo,
+        min_size=1,
+        max_size=5,
+        open=True,
+        # What PostgresSaver requires of its connections.
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+    )
+    saver = PostgresSaver(pool)
+    saver.setup()  # creates or migrates the checkpoint tables; safe to repeat
+    return saver
+
+
 class Engine:
     def __init__(self, settings: Settings, db: Database, gateway: ModelGateway | None = None):
         self.settings = settings
@@ -182,8 +216,7 @@ class Engine:
             skill_text=skills.get("foundation-test", ""),
             skills=skills,
         )
-        conn = sqlite3.connect(settings.checkpoint_path, check_same_thread=False)
-        self.checkpointer = SqliteSaver(conn)
+        self.checkpointer = open_checkpointer(settings)
         self.graphs = {
             name: wf.build(self.harness).compile(checkpointer=self.checkpointer)
             for name, wf in WORKFLOWS.items()
