@@ -43,7 +43,7 @@ if [ "$have" != "3" ] || [ "${1:-}" = "--new-sign-in" ]; then
     sed -i "s|^$key=.*|$key=$value|" .env
   done
   SETUP_KEY=$(grep 'setup key:' data/auth.txt | sed 's/.*setup key: *//')
-  SETUP_LINK=$(grep 'link:' data/auth.txt | sed 's/.*link: *//')
+  SETUP_QR=$(sed -n '/^Scan this with your authenticator app:/,$p' data/auth.txt | tail -n +2)
   rm -f data/auth.txt
 fi
 
@@ -88,15 +88,15 @@ echo
 echo "Your site is live: https://$DOMAIN"
 if [ -n "$SETUP_KEY" ]; then
   echo
-  echo "One thing left, on your phone. Open Google Authenticator (or Microsoft Authenticator),"
-  echo "tap +, choose 'Enter a setup key', give it any name, and type this key:"
+  echo "One thing left, on your phone. No code is ever sent to you: an app on your phone shows it."
+  echo "Open Google Authenticator (or Microsoft Authenticator), tap +, choose 'Scan a QR code',"
+  echo "and point the phone at this:"
   echo
-  echo "    $SETUP_KEY"
+  echo "$SETUP_QR"
   echo
-  if command -v qrencode >/dev/null; then
-    echo "Or choose 'Scan a QR code' and point the phone at this:"
-    qrencode -t ANSIUTF8 "$SETUP_LINK"
-  fi
-  echo "Write the key down somewhere safe, and share it with no one."
-  echo "To sign in: your password, plus the six-digit code the app shows."
+  echo "If it will not scan, choose 'Enter a setup key' and type:  $SETUP_KEY"
+  echo
+  echo "The app now shows a six-digit code that changes every 30 seconds."
+  echo "To sign in: your password, plus the code showing at that moment."
+  echo "Write the setup key down somewhere safe, and share it with no one."
 fi

@@ -132,6 +132,11 @@ def test_pages_use_the_bundled_fonts_and_call_no_other_host(client):
     assert "http://" not in page and "https://" not in page  # no font host, no outside request at all
 
 
+def test_setup_link_can_be_drawn_as_a_qr_code_to_scan():
+    drawn = auth.qr_text(auth.provisioning_uri(TOTP, "owner"))
+    assert len(drawn.splitlines()) > 10 and TOTP not in drawn  # a picture, with the key not spelled out in it
+
+
 def test_password_hash_and_codes():
     stored = auth.hash_password(PASSWORD)
     assert stored.startswith("scrypt:") and "$" not in stored and PASSWORD not in stored

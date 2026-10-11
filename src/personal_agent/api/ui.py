@@ -205,7 +205,8 @@ def sign_in_page(brand: str, message: str = "", next_path: str = "/queue") -> st
 <body>
 <main class="signin" style="margin-left:auto">
   <h1>{escape(brand)}</h1>
-  <p class="lede">Sign in with your password and the code from your authenticator app.</p>
+  <p class="lede">Sign in with your password and the six-digit code showing in your authenticator app.
+   No code is sent to you: the app on your phone shows it.</p>
   {note}
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{escape(next_path)}"/>

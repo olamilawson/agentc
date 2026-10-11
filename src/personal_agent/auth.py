@@ -138,6 +138,17 @@ class LoginGuard:
             return False
 
 
+def qr_text(uri: str) -> str:
+    """The setup link as a QR code drawn in text, for a phone to scan off the screen."""
+    import io
+
+    import segno
+
+    out = io.StringIO()
+    segno.make(uri, error="l").terminal(out=out, compact=True, border=2)
+    return out.getvalue()
+
+
 def main() -> int:
     import getpass
 
@@ -160,6 +171,9 @@ def main() -> int:
     print(f"  link:      {provisioning_uri(secret, 'owner')}")
     print()
     print("Keep the setup key somewhere safe. With a lost phone and no key, you set the login again from the server.")
+    print()
+    print("Scan this with your authenticator app:")
+    print(qr_text(provisioning_uri(secret, 'owner')))
     return 0
 
 
