@@ -51,7 +51,31 @@ is checked before it counts.
 One key per provider, in the server environment or a secrets file outside the
 repository. Keys never go into prompts, never into git, never into the UI.
 
-## 7. Records
+## 7. Deploys — only through `deploy.sh`
+
+```bash
+/opt/personal-agent/deploy/deploy.sh
+```
+
+It pulls the checkout (fast-forward only), builds the api image, runs the
+Postgres checkpointer test in a throwaway container of that image, and replaces
+the running containers only if the test passed; then it waits for `/health`. A
+failed or skipped test leaves the old api running. Do not deploy with a bare
+`docker compose up -d --build`: that skips the test.
+
+What the server needs for it:
+
+- The checkout tracks the GitHub branch and carries no local commits or edits;
+  a diverged checkout stops the deploy at the pull. Server-only settings live
+  in `.env`, which git ignores.
+- If the repository is private, the server pulls with a read-only deploy key
+  for this repository alone — never a personal token or a key that can push.
+- Outbound access to GitHub and PyPI (the firewall above allows outgoing).
+- Whoever runs it can drive Docker, which is root on this host: keep that to
+  the one admin account from item 2.
+
+## 8. Records
 
 Note the date each item above was completed in `docs/adr/` alongside the
-Foundation gate result: firewall verified, restore verified.
+Foundation gate result: firewall verified, restore verified, first deploy
+through `deploy.sh` passed its test.
