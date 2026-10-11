@@ -31,6 +31,15 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Microsoft Graph mail** — with the four `MS_GRAPH_*` settings, an approved
+  sponsorship reply is sent from the one configured Outlook mailbox, in the
+  original thread, to exactly the approved address with exactly the approved
+  subject and body; and triage reads earlier mail with the sender. A refusal
+  before the send returns the reply to the queue for a second approval; a
+  dropped connection during the send stops the run and is never retried.
+  Without the settings, replies are held in the local outbox as before. Tested
+  against a stand-in for Microsoft's servers, not a live tenant. Setup:
+  `deploy/microsoft-graph.md`.
 - **Sign-in** — one owner, a password and a one-time code from an
   authenticator app (`src/personal_agent/auth.py`). With the three login
   secrets set, every route needs a session except `/health`, `/login` and the

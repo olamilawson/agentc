@@ -28,7 +28,8 @@ from personal_agent.db import Database
 from personal_agent.engine import steps
 from personal_agent.engine.approval import make_approval_node
 from personal_agent.engine.graph import ROLE
-from personal_agent.gateway.tools import ApprovalLapsed, ApprovalRequired
+from personal_agent.gateway.tools import ApprovalLapsed, ApprovalRequired, UncertainOutcome
+from personal_agent.graph_mail import GraphError
 from personal_agent.harness.context import build_context
 from personal_agent.harness.contract import StepContract
 
@@ -92,6 +93,7 @@ class ScoreIn(BaseModel):
     enquiry_text: str = Field(min_length=1)
     enquiry: dict
     history: list[dict] = []
+    correspondence: list[dict] = []
 
 
 class ScoreOut(BaseModel):
@@ -112,6 +114,7 @@ class ReplyIn(BaseModel):
     enquiry_text: str = Field(min_length=1)
     enquiry: dict
     history: list[dict] = []
+    correspondence: list[dict] = []
     route: ReplyRoute
     route_reason: str
     missing_information: list[str] = []
@@ -166,6 +169,14 @@ def sponsorship_contracts() -> dict[str, StepContract]:
                 "naira, otherwise null. Use null for anything the mail does not state.",
                 ClassifyOut,
             ),
+        ),
+        "look_up_history": StepContract(
+            node="look_up_history",
+            tier="cheap",  # code node: runs without a model; the tier is unused
+            allowed_tools=["search_mail"],
+            input_schema=ClassifyIn,
+            output_schema=ClassifyIn,
+            instruction="",
         ),
         "score_and_route": StepContract(
             node="score_and_route",
@@ -352,6 +363,8 @@ def approval_notes(state: dict) -> dict:
         f"amount: {enquiry.get('amount') or 'not stated'}",
         f"Previous enquiries on the ledger: {len(state.get('history', []))}",
     ]
+    if state.get("correspondence"):
+        notes.append(f"Earlier mail with this sender in the mailbox: {len(state['correspondence'])}")
     notes += [f"Open fault: {fault}" for fault in state.get("faults", [])]
     return {"action": "send", "notes": notes + list(state.get("flags", []))}
 
@@ -363,6 +376,7 @@ def sponsorship_outputs(state: dict) -> dict | None:
     out = {
         "enquiry": state["enquiry"],
         "history": state.get("history", []),
+        "correspondence": state.get("correspondence", []),
         "scores": state.get("scores"),
         "mean_score": state.get("mean_score"),
         "risk_flags": state.get("risk_flags", []),
@@ -397,6 +411,7 @@ class TriageState(TypedDict, total=False):
     enquiry_text: str
     enquiry: dict
     history: list[dict]
+    correspondence: list[dict]
     scores: list[dict]
     mean_score: float
     risk_flags: list[dict]
@@ -426,7 +441,11 @@ def build_sponsorship_graph(h):
         untrusted = [("enquiry", state["enquiry_text"])]
         if payload.get("history"):
             untrusted.append(("ledger history", json.dumps(payload["history"], indent=2)))
-        return steps.run_model(h, node, state, payload, rubric, untrusted, hide=("enquiry_text", "history"))
+        if payload.get("correspondence"):
+            untrusted.append(("earlier correspondence", json.dumps(payload["correspondence"], indent=2)))
+        return steps.run_model(
+            h, node, state, payload, rubric, untrusted, hide=("enquiry_text", "history", "correspondence")
+        )
 
     def new_enquiry(state: TriageState) -> dict:
         # Code node. The reply address is the envelope sender, fixed here; nothing
@@ -453,13 +472,32 @@ def build_sponsorship_graph(h):
             state["inputs"]["sender"], state["enquiry"].get("organisation"), exclude_run_id=state["run_id"]
         )
         keep = ("received_at", "sender", "organisation", "request", "amount", "route", "decision", "outcome")
-        return {"history": [{k: row[k] for k in keep} for row in rows]}
+        update: dict = {"history": [{k: row[k] for k in keep} for row in rows], "correspondence": []}
+        if h.mail is not None:
+            # Earlier mail with this sender, read from the connected mailbox. A failed
+            # read is flagged and the triage goes on with the ledger alone.
+            try:
+                found = h.tools.call(
+                    state["run_id"], "look_up_history", h.contracts["look_up_history"].allowed_tools,
+                    "search_mail", {"address": state["inputs"]["sender"]},
+                )
+                this_mail = state["inputs"].get("message_id")
+                update["correspondence"] = [
+                    {k: m[k] for k in ("received_at", "from", "subject", "preview")}
+                    for m in found["messages"] if m.get("id") != this_mail
+                ]
+            except GraphError as e:
+                update["flags"] = list(state.get("flags", [])) + [f"earlier correspondence could not be read: {e}"]
+        return update
 
     def score_and_route(state: TriageState) -> dict:
         scored, usage = run_model(
             "score_and_route",
             state,
-            {"enquiry_text": state["enquiry_text"], "enquiry": state["enquiry"], "history": state["history"]},
+            {
+                "enquiry_text": state["enquiry_text"], "enquiry": state["enquiry"],
+                "history": state["history"], "correspondence": state.get("correspondence", []),
+            },
             skill_text,
         )
         route, reason = decide_route(policy, state["enquiry"], scored, state["enquiry_text"])
@@ -503,6 +541,7 @@ def build_sponsorship_graph(h):
                 "enquiry_text": state["enquiry_text"],
                 "enquiry": state["enquiry"],
                 "history": state["history"],
+                "correspondence": state.get("correspondence", []),
                 "route": state["route"],
                 "route_reason": state["route_reason"],
                 "missing_information": state["missing_information"],
@@ -555,6 +594,17 @@ def build_sponsorship_graph(h):
             )
         except (ApprovalRequired, ApprovalLapsed) as e:
             return {"approval_error": str(e)}
+        except GraphError as e:
+            # A definite failure: nothing went out. The reply returns to the queue
+            # with the reason, and approving it again tries again.
+            db.update_ledger_row(state["ledger_id"], outcome=f"send failed, nothing sent: {e}")
+            return {"approval_error": f"The reply was not sent: {e}. Approve again to retry."}
+        except UncertainOutcome as e:
+            # Unknown: it may have gone. The harness does not retry; the run stops for the owner.
+            db.update_ledger_row(
+                state["ledger_id"], decision="reply approved by owner", outcome=f"send outcome unknown: {e}"
+            )
+            raise
         db.update_ledger_row(
             state["ledger_id"],
             decision="reply approved by owner",

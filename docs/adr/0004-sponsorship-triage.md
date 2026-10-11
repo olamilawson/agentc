@@ -48,6 +48,27 @@ open decisions). Until there is:
   because proposing dates needs the calendar. This departs from the PRD's
   route table and reverts when the calendar read tool exists.
 
+## Update, 2026-10-11: the Graph connection exists
+
+`src/personal_agent/graph_mail.py` connects one mailbox through a registered
+application (client credentials). `send_mail` uses it when the four
+`MS_GRAPH_*` settings are present and falls back to the local outbox when
+they are not. "Look up history" also reads earlier mail with the sender. The
+pursue reply still asks for dates: there is no calendar read yet.
+
+- The reply is built as a draft with `createReply`, patched to the approved
+  recipient, subject and body, then sent. Graph's one-step `reply` action
+  was not used: it addresses the reply itself, from the original's Reply-To
+  header when there is one, which the approval never saw.
+- Only the final `send` call is irreversible. A transport failure or a 5xx on
+  it raises `UncertainOutcome`; the run stops and nothing retries. Every
+  earlier failure is a definite `GraphError`, after which the reply returns
+  to the approval queue and a second approval tries again.
+- No Outlook draft is created before approval. The PRD lists that as a
+  draft-class tool; it would leave a draft in the mailbox for each rejected
+  reply, and the approved content is what is sent either way.
+- The connection has run only against a stand-in for Microsoft's servers.
+
 ## Other choices
 
 - The reply address is the envelope sender from the webhook, fixed in the first

@@ -127,8 +127,9 @@ read the top of the script.
 
 ## Known limits on the first day
 
-- **Mail has no connection.** The agent holds approved sponsorship replies in a
-  local outbox and sends none. Sending needs the Microsoft Graph application.
+- **Mail has no connection until you set it up.** The agent holds approved
+  sponsorship replies in a local outbox and sends none. `deploy/microsoft-graph.md`
+  has the steps; a tenant administrator does the first four.
 - **Accepted skill changes do not persist.** The image carries the skill files,
   so a change you accept on the Skill library screen disappears at the next
   deploy. Until the server mounts `skills/` from a git checkout, make skill

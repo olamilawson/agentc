@@ -61,6 +61,12 @@ class Settings(BaseModel):
     creative_review: CreativeReviewSettings = CreativeReviewSettings()
     # Providers approved for confidential work; a restricted client's runs use only these.
     confidential_providers: list[str] = []
+    # Microsoft Graph mail (graph_mail.py). All four set: replies are sent through
+    # this mailbox. Any missing: approved replies are held in the local outbox.
+    graph_tenant_id: str | None = None
+    graph_client_id: str | None = None
+    graph_client_secret: str | None = None
+    graph_mailbox: str | None = None
     # The name shown in the rail and the page titles.
     brand_name: str = "Personal Agent"
     # Owner login (see auth.py). All three set: every page needs a session.
@@ -100,6 +106,10 @@ def load_settings() -> Settings:
     env = os.environ.get
     return Settings(
         brand_name=env("PERSONAL_AGENT_NAME") or "Personal Agent",
+        graph_tenant_id=env("MS_GRAPH_TENANT_ID") or None,
+        graph_client_id=env("MS_GRAPH_CLIENT_ID") or None,
+        graph_client_secret=env("MS_GRAPH_CLIENT_SECRET") or None,
+        graph_mailbox=env("MS_GRAPH_MAILBOX") or None,
         owner_password_hash=env("PERSONAL_AGENT_OWNER_PASSWORD_HASH") or None,
         totp_secret=env("PERSONAL_AGENT_TOTP_SECRET") or None,
         session_secret=env("PERSONAL_AGENT_SESSION_SECRET") or None,

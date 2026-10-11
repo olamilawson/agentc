@@ -666,6 +666,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             f"<td>{'owner approval for every call' if cls == 'release' else 'none'}</td></tr>"
             for name, cls in engine.harness.tools.registered()
         )
+        mail = engine.harness.mail
+        mail_line = (
+            f"Mail goes through Microsoft Graph from {escape(mail.mailbox)}. <code>send_mail</code> sends a reply once you approve it."
+            if mail else
+            "No mail connection yet: <code>send_mail</code> holds approved replies in the local outbox."
+        )
         policy = settings.sponsorship
         sponsorship = (
             "no policy file: each enquiry escalates" if policy is None else
@@ -692,7 +698,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 </table>
 <h2>Connected tools</h2>
 <div class="tablewrap"><table><tr><th>Tool</th><th>Class</th><th>Approval</th></tr>{tools}</table></div>
-<p class="meta">No mail connection yet: <code>send_mail</code> holds approved replies in the local outbox.</p>
+<p class="meta">{mail_line}</p>
 <h2>Other settings</h2>
 <table>
 <tr><td>Sponsorship policy</td><td>{sponsorship}</td></tr>

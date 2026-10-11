@@ -26,6 +26,12 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       PERSONAL_AGENT_N8N_SECRET: ${PERSONAL_AGENT_N8N_SECRET:-}
       PERSONAL_AGENT_NAME: ${PERSONAL_AGENT_NAME:-Personal Agent}
+      # Microsoft Graph mail. All four set: approved replies go out through the
+      # mailbox. Any empty: they are held in the local outbox (deploy/microsoft-graph.md).
+      MS_GRAPH_TENANT_ID: ${MS_GRAPH_TENANT_ID:-}
+      MS_GRAPH_CLIENT_ID: ${MS_GRAPH_CLIENT_ID:-}
+      MS_GRAPH_CLIENT_SECRET: ${MS_GRAPH_CLIENT_SECRET:-}
+      MS_GRAPH_MAILBOX: ${MS_GRAPH_MAILBOX:-}
       # Owner sign-in. On this server the app refuses every request until all
       # three are set (create them with: python -m personal_agent.auth).
       PERSONAL_AGENT_REQUIRE_LOGIN: "1"

@@ -30,6 +30,7 @@ from personal_agent.engine.sponsorship_triage import (
     sponsorship_outputs,
 )
 from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
+from personal_agent.graph_mail import GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
 from personal_agent.harness.contract import StepContract, StepFailed
@@ -49,6 +50,7 @@ class Harness:
     contracts: dict[str, StepContract]
     skill_text: str
     skills: dict[str, str] = field(default_factory=dict)
+    mail: GraphMail | None = None  # the Microsoft Graph mailbox, when connected
     tools: ToolGateway = field(init=False)
     clients: ClientStore = field(init=False)
 
@@ -96,10 +98,12 @@ class Harness:
                 },
             )
         )
-        # Release-class mail. Microsoft Graph is not connected yet: an approved
-        # message is held in the local outbox and reported as not sent. The Graph
-        # send tool replaces this function under the same name, class and approval.
-        self.tools.register(ToolSpec(name="send_mail", cls=ToolClass.RELEASE, fn=self._hold_mail))
+        # Release-class mail. With Microsoft Graph connected the approved reply is
+        # sent through the mailbox; without it the reply is held in the local
+        # outbox and reported as not sent. Same name, class and approval either way.
+        self.tools.register(ToolSpec(name="send_mail", cls=ToolClass.RELEASE, fn=self._send_mail))
+        # Read-class: earlier mail to or from an address in the connected mailbox.
+        self.tools.register(ToolSpec(name="search_mail", cls=ToolClass.READ, fn=self._search_mail))
         # Draft-class: a document in the run's own client folder (reversible).
         self.tools.register(
             ToolSpec(
@@ -140,6 +144,18 @@ class Harness:
                 for p in pages
             ],
         }
+
+    def _send_mail(self, payload: dict) -> dict:
+        if self.mail is None:
+            return self._hold_mail(payload)
+        return self.mail.send_reply(
+            payload["to"], payload["subject"], payload["body"], payload.get("in_reply_to")
+        )
+
+    def _search_mail(self, payload: dict) -> dict:
+        if self.mail is None:
+            return {"connected": False, "messages": []}
+        return {"connected": True, "messages": self.mail.search_correspondence(payload["address"])}
 
     def _hold_mail(self, payload: dict) -> dict:
         outbox_id = self.db.add_to_outbox(
@@ -267,7 +283,8 @@ def open_checkpointer(settings: Settings):
 
 
 class Engine:
-    def __init__(self, settings: Settings, db: Database, gateway: ModelGateway | None = None):
+    def __init__(self, settings: Settings, db: Database, gateway: ModelGateway | None = None,
+                 mail: GraphMail | None = None):
         self.settings = settings
         self.db = db
         _, skills = load_library(settings.skills_dir)
@@ -281,6 +298,7 @@ class Engine:
             },
             skill_text=skills.get("foundation-test", ""),
             skills=skills,
+            mail=mail or graph_from_settings(settings),
         )
         self.checkpointer = open_checkpointer(settings)
         self._compile_graphs()
