@@ -20,31 +20,53 @@ class ModelGateway:
     def __init__(self, route_table: dict[str, TierRoute]):
         self.route_table = route_table
 
-    def complete(self, contract: StepContract, context: str) -> dict:
+    def complete(
+        self, contract: StepContract, context: str, images: list[tuple[str, bytes]] | None = None
+    ) -> dict:
         """Returns {"data": <parsed json>, "model": str, "fallback_used": bool,
-        "usage": {"tokens_in": int, "tokens_out": int, "cost_usd": float}}."""
+        "usage": {"tokens_in": int, "tokens_out": int, "cost_usd": float}}.
+
+        images: (label, JPEG bytes) pairs sent with the request, each preceded
+        by its label so the model can cite the page it is looking at.
+        """
         route = self.route_table[contract.tier]
         try:
-            return self._call(route.primary, contract, context, fallback_used=False)
+            return self._call(route.primary, contract, context, False, images)
         except ProviderError:
             if not route.fallback:
                 raise
-            result = self._call(route.fallback, contract, context, fallback_used=True)
+            result = self._call(route.fallback, contract, context, True, images)
             result["fallback_used"] = True
             return result
 
-    def _call(self, model: str, contract: StepContract, context: str, fallback_used: bool) -> dict:
+    def _call(
+        self,
+        model: str,
+        contract: StepContract,
+        context: str,
+        fallback_used: bool,
+        images: list[tuple[str, bytes]] | None = None,
+    ) -> dict:
         import litellm
 
+        ask = (
+            f"Produce the output for the '{contract.node}' step as a single JSON object "
+            "that conforms to the output schema described in the context. No prose outside the JSON."
+        )
+        user: str | list = ask
+        if images:
+            import base64
+
+            user = [{"type": "text", "text": ask}]
+            for label, data in images:
+                user.append({"type": "text", "text": label})
+                user.append({
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(data).decode()},
+                })
         messages = [
             {"role": "system", "content": contract.instruction + "\n\n" + context},
-            {
-                "role": "user",
-                "content": (
-                    f"Produce the output for the '{contract.node}' step as a single JSON object "
-                    "that conforms to the output schema described in the context. No prose outside the JSON."
-                ),
-            },
+            {"role": "user", "content": user},
         ]
         try:
             response = litellm.completion(
@@ -82,7 +104,9 @@ class RecordedGateway(ModelGateway):
         self._responses = {k: list(v) for k, v in responses.items()}
         self.used_fallback = False
 
-    def complete(self, contract: StepContract, context: str) -> dict:
+    def complete(
+        self, contract: StepContract, context: str, images: list[tuple[str, bytes]] | None = None
+    ) -> dict:
         queue = self._responses.get(contract.node)
         if not queue:
             raise ProviderError(f"no recorded response for node '{contract.node}'")

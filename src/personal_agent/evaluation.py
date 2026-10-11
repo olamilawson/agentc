@@ -21,6 +21,7 @@ import json
 import shutil
 import sys
 import tempfile
+import textwrap
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -28,13 +29,14 @@ from typing import Iterator
 from personal_agent.config import REPO_ROOT, Settings, load_settings
 from personal_agent.db import Database
 from personal_agent.engine.brief_evaluation import CRITERIA, unmatched_quotes
+from personal_agent.engine.creative_review import CRITERIA as CREATIVE_CRITERIA, unlinked as creative_unlinked
 from personal_agent.engine.runner import Engine
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
 from personal_agent.harness.models import ModelGateway
 from personal_agent.skills.loader import load_library
 
 MIN_GATE_ITEMS = 15  # PRD: at least fifteen real past items per workflow
-WORKFLOWS = ("brief-evaluation", "sponsorship-triage")
+WORKFLOWS = ("brief-evaluation", "sponsorship-triage", "creative-review")
 
 
 def load_set(path: Path) -> list[dict]:
@@ -220,6 +222,145 @@ def judge_sponsorship_gate(items: list[dict], set_size: int, summary: dict, min_
     return {"passed": not blocked, "min_agreement": min_agreement, "blocked_by": blocked}
 
 
+# --- creative review -----------------------------------------------------------------
+# PRD measures: share of scores within one point of the owner's; change requests
+# lacking a criterion or location. Gate: no unlinked requests; agreement at or
+# above the level the owner sets. (The owner's edit rate needs live use.)
+def text_pdf(pages: list[str]) -> bytes:
+    """A plain PDF with one page per string, so a set can hold written work as
+    text and still go through the real page renderer."""
+    def stream(text: str) -> bytes:
+        lines = [w for line in text.split("\n") for w in (textwrap.wrap(line, 80) or [""])]
+        escaped = (l.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for l in lines)
+        ops = ["BT", "/F1 12 Tf", "16 TL", "56 770 Td", *(f"({l}) Tj T*" for l in escaped), "ET"]
+        return "\n".join(ops).encode("latin-1", "replace")
+
+    count = len(pages)
+    font = 3 + 2 * count  # object numbers: 1 catalog, 2 page tree, then a page and its content each
+    kids = " ".join(f"{3 + 2 * i} 0 R" for i in range(count))
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", f"<< /Type /Pages /Kids [{kids}] /Count {count} >>".encode()]
+    for i, text in enumerate(pages):
+        body = stream(text)
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents {4 + 2 * i} 0 R "
+            f"/Resources << /Font << /F1 {font} 0 R >> >> >>".encode()
+        )
+        objects.append(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(body), body))
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    out, offsets = bytearray(b"%PDF-1.4\n"), []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)
+
+
+def run_creative_set(items: list[dict], settings: Settings, gateway: ModelGateway | None = None) -> list[dict]:
+    with scratch_engine(settings, gateway) as engine:
+        scope = engine.harness.clients.ensure("evaluation")
+        results = []
+        for item in items:
+            # An item holds written work as page text; it becomes a PDF so the real renderer runs.
+            work = engine.harness.clients.store_file(scope, f"{item['id']}.pdf", text_pdf(item["pages"]))
+            run_id = engine.start_run("creative-review", "evaluation", {
+                "work_paths": [work],
+                "brief_text": item["brief"],
+                "discipline": item["discipline"],
+                "work_kind": item.get("work_kind", "general"),
+            })
+            run = engine.db.get_run(run_id)
+            out = run["outputs"] or {}
+            ref_scores = (item.get("owner") or item.get("provisional") or {}).get("scores") or {}
+            agent_scores = {r["criterion"]: r["score"] for r in out.get("ratings") or []}
+            rating_faults, request_faults = creative_unlinked(
+                out.get("ratings") or [], out.get("requests") or [], len(out.get("pages") or [])
+            )
+            results.append({
+                "id": item["id"],
+                "reference": "owner" if _is_gate_item(item) else "provisional",
+                "completed": run["status"] == "waiting_for_approval",
+                "error": run["error_reason"],
+                "agent_scores": agent_scores,
+                "reference_scores": ref_scores,
+                "diffs": {c: agent_scores[c] - ref_scores[c] for c in ref_scores if c in agent_scores},
+                "unlinked": rating_faults + request_faults,
+                "requests": len(out.get("requests") or []),
+                "tokens": (run["tokens_in"] or 0) + (run["tokens_out"] or 0),
+                "cost_usd": run["cost_usd"] or 0.0,
+            })
+        return results
+
+
+def summarise_creative(results: list[dict]) -> dict:
+    done = [r for r in results if r["completed"]]
+    diffs = [d for r in done for d in r["diffs"].values()]
+    by_criterion = {}
+    for c in CREATIVE_CRITERIA:
+        ds = [r["diffs"][c] for r in done if c in r["diffs"]]
+        by_criterion[c] = {
+            "within_one": _share(sum(abs(d) <= 1 for d in ds), len(ds)),
+            "mean_diff": round(sum(ds) / len(ds), 2) if ds else None,
+        }
+    return {
+        "items": len(results),
+        "failed": len(results) - len(done),
+        "scores_compared": len(diffs),
+        "within_one": _share(sum(abs(d) <= 1 for d in diffs), len(diffs)),
+        "exact": _share(sum(d == 0 for d in diffs), len(diffs)),
+        "by_criterion": by_criterion,
+        "unlinked": sum(len(r["unlinked"]) for r in results),
+        "cost_usd": round(sum(r["cost_usd"] for r in results), 4),
+    }
+
+
+def judge_creative_gate(items: list[dict], set_size: int, summary: dict, min_agreement: float | None) -> dict:
+    blocked = _set_blockers(items, set_size, summary)
+    if summary["unlinked"]:
+        blocked.append(f"{summary['unlinked']} ratings or requests lack a cited page, criterion or location")
+    if min_agreement is None:
+        blocked.append("the owner has not set an agreement level (--min-agreement)")
+    elif summary["within_one"] is None or summary["within_one"] < min_agreement:
+        blocked.append(
+            f"agreement within one point is {summary['within_one']}, below the owner's level {min_agreement}"
+        )
+    return {"passed": not blocked, "min_agreement": min_agreement, "blocked_by": blocked}
+
+
+def _format_creative_report(report: dict) -> str:
+    s, gate = report["summary"], report["gate"]
+    lines = [
+        f"{report['workflow']}: {s['items']} items, {s['failed']} failed, cost ${s['cost_usd']:.2f}",
+        f"skill library {report['skill_library_version'][:12]}",
+        "",
+        f"scores within one point   {_pct(s['within_one'])}  ({s['scores_compared']} scores compared)",
+        f"scores exact              {_pct(s['exact'])}",
+        f"unlinked ratings/requests {s['unlinked']}",
+        "",
+        "by criterion (within one / mean agent minus reference)",
+    ]
+    for c, v in s["by_criterion"].items():
+        mean = "n/a" if v["mean_diff"] is None else f"{v['mean_diff']:+.2f}"
+        lines.append(f"  {c:<12} {_pct(v['within_one']):>4}  {mean}")
+    lines += ["", "items"]
+    for r in report["items"]:
+        if not r["completed"]:
+            lines.append(f"  {r['id']}  FAILED  {r['error']}")
+            continue
+        notes = [f"{c} {d:+d}" for c, d in r["diffs"].items() if abs(d) > 1]
+        notes += [f"{len(r['unlinked'])} unlinked"] * bool(r["unlinked"])
+        lines.append(f"  {r['id']}  {r['requests']} requests" + (f"  [{'; '.join(notes)}]" if notes else ""))
+    lines.append("")
+    if gate["passed"]:
+        lines.append(f"RELEASE GATE: passed (agreement level {gate['min_agreement']})")
+    else:
+        lines.append("RELEASE GATE: not passed")
+        lines += [f"  - {reason}" for reason in gate["blocked_by"]]
+    return "\n".join(lines)
+
+
 def _set_blockers(items: list[dict], set_size: int, summary: dict) -> list[str]:
     """What stops any set from being a gate set, whatever the workflow."""
     blocked = []
@@ -283,6 +424,18 @@ def evaluate(
     all_items = load_set(set_path)
     items = all_items[:limit] if limit else all_items
     version, _ = load_library(settings.skills_dir)
+    if workflow == "creative-review":
+        results = run_creative_set(items, settings, gateway)
+        summary = summarise_creative(results)
+        return {
+            "workflow": workflow,
+            "set": str(set_path),
+            "skill_library_version": version,
+            "route_table": {tier: route.model_dump() for tier, route in settings.route_table.items()},
+            "summary": summary,
+            "gate": judge_creative_gate(items, len(all_items), summary, min_agreement),
+            "items": results,
+        }
     if workflow == "sponsorship-triage":
         results, released = run_sponsorship_set(items, settings, gateway)
         summary = summarise_sponsorship(results, released)
@@ -318,6 +471,8 @@ def _pct(share: float | None) -> str:
 def format_report(report: dict) -> str:
     if report["workflow"] == "sponsorship-triage":
         return _format_sponsorship_report(report)
+    if report["workflow"] == "creative-review":
+        return _format_creative_report(report)
     s, gate = report["summary"], report["gate"]
     lines = [
         f"{report['workflow']}: {s['items']} items, {s['failed']} failed, cost ${s['cost_usd']:.2f}",

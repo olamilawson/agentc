@@ -19,6 +19,7 @@ from personal_agent.clients import ClientScope, ClientStore, parse_document
 from personal_agent.config import Settings
 from personal_agent.db import Database, new_id
 from personal_agent.engine.brief_evaluation import brief_contracts, brief_outputs, build_brief_graph
+from personal_agent.engine.creative_review import build_creative_graph, creative_contracts, creative_outputs
 from personal_agent.engine.graph import ROLE, DraftIn, DraftOut, build_test_graph
 from personal_agent.engine.sponsorship_triage import (
     build_sponsorship_graph,
@@ -31,6 +32,7 @@ from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
 from personal_agent.harness.contract import StepContract, StepFailed
 from personal_agent.harness.models import ModelGateway
 from personal_agent.harness.runner import NodeRunner
+from personal_agent.rendering import Page, render_file
 from personal_agent.skills.loader import load_library
 
 PENDING_STATUSES = {"waiting_for_approval", "waiting_for_input"}
@@ -78,6 +80,9 @@ class Harness:
                 },
             )
         )
+        self.tools.register(
+            ToolSpec(name="render_client_file", cls=ToolClass.READ, fn=self._render_client_file)
+        )
         # Release-class mail. Microsoft Graph is not connected yet: an approved
         # message is held in the local outbox and reported as not sent. The Graph
         # send tool replaces this function under the same name, class and approval.
@@ -95,6 +100,33 @@ class Harness:
                 },
             )
         )
+
+    def render_work(self, client: str, paths: list[str]) -> list[Page]:
+        """Creative work in one client's folder as pages, numbered across the files."""
+        scope, pages = ClientScope(client), []
+        for path in paths:
+            pages += render_file(
+                self.clients.read_bytes(scope, path), path,
+                self.settings.creative_review.image_max_edge, first_number=len(pages) + 1,
+            )
+        return pages
+
+    def _render_client_file(self, payload: dict) -> dict:
+        # Read-class: page text and whether each page has an image. The image
+        # bytes are never returned here, so they stay out of the tool-call log.
+        data = self.clients.read_bytes(ClientScope(payload["client"]), payload["path"])
+        pages = render_file(
+            data, payload["path"], self.settings.creative_review.image_max_edge,
+            first_number=payload.get("first_number", 1),
+        )
+        return {
+            "client": payload["client"],
+            "path": payload["path"],
+            "pages": [
+                {"source": p.source, "number": p.number, "text": p.text[:4000], "has_image": p.image is not None}
+                for p in pages
+            ],
+        }
 
     def _hold_mail(self, payload: dict) -> dict:
         outbox_id = self.db.add_to_outbox(
@@ -163,6 +195,7 @@ WORKFLOWS: dict[str, Workflow] = {
     "foundation-test": Workflow(build_test_graph, _test_outputs),
     "brief-evaluation": Workflow(build_brief_graph, brief_outputs),
     "sponsorship-triage": Workflow(build_sponsorship_graph, sponsorship_outputs, sponsorship_rejected),
+    "creative-review": Workflow(build_creative_graph, creative_outputs),
 }
 
 
@@ -212,7 +245,9 @@ class Engine:
             settings=settings,
             db=db,
             gateway=gateway or ModelGateway(settings.route_table),
-            contracts={**default_contracts(), **brief_contracts(), **sponsorship_contracts()},
+            contracts={
+                **default_contracts(), **brief_contracts(), **sponsorship_contracts(), **creative_contracts(),
+            },
             skill_text=skills.get("foundation-test", ""),
             skills=skills,
         )

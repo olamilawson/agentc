@@ -47,9 +47,9 @@ class _Tap(ModelGateway):
         self.inner = inner
         self.contexts: list[str] = []
 
-    def complete(self, contract: StepContract, context: str) -> dict:
+    def complete(self, contract: StepContract, context: str, images=None) -> dict:
         self.contexts.append(context)
-        return self.inner.complete(contract, context)
+        return self.inner.complete(contract, context, images) if images else self.inner.complete(contract, context)
 
 
 def build_document(spec: dict) -> tuple[str, bytes]:

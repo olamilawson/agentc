@@ -14,7 +14,13 @@ class NodeRunner:
         self.gateway = gateway
         self.tracker = tracker
 
-    def run(self, contract: StepContract, payload: dict, context: str | None = None) -> dict:
+    def run(
+        self,
+        contract: StepContract,
+        payload: dict,
+        context: str | None = None,
+        images: list[tuple[str, bytes]] | None = None,
+    ) -> dict:
         """Returns the validated output dict. Raises StepFailed after one retry.
 
         `context` is the assembled prompt context (fixed order, untrusted data
@@ -34,7 +40,12 @@ class NodeRunner:
                     "Return a corrected JSON object."
                 )
             try:
-                result = self.gateway.complete(contract, body)
+                # Page images, when a step has them, go with every attempt.
+                result = (
+                    self.gateway.complete(contract, body, images=images)
+                    if images
+                    else self.gateway.complete(contract, body)
+                )
                 self.tracker.add_usage(
                     result["usage"]["tokens_in"], result["usage"]["tokens_out"], result["usage"]["cost_usd"]
                 )

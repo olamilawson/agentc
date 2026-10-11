@@ -31,6 +31,15 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Creative review graph** — receive files (work, brief, calibration examples)
+  → render pages (PDFium; images and text, no model) → score by brief (strong,
+  with the page images, in groups) → write feedback (standard, for a designer
+  or a copywriter) → verify links (code; returns twice at most) → owner
+  approval → file the feedback to the client folder. PDFs and image files
+  render to page images; Word and text files are reviewed on text alone;
+  PowerPoint must be exported to PDF. The rubric anchors are provisional and
+  there are no calibration examples yet. See
+  `docs/adr/0005-creative-review.md`.
 - **Sponsorship triage graph** — new enquiry → classify (cheap) → look up
   history (ledger) → score and route (strong; the route is decided in code from
   `config/sponsorship.yaml`) → draft reply (standard) → check reply (facts in
@@ -83,6 +92,14 @@ curl -s localhost:8000/runs -X POST -H 'content-type: application/json' \
 # or: "inputs":{"brief_text":"..."}
 ```
 
+Review creative work against its brief (both already uploaded to the client
+folder; `discipline` is who the feedback is for):
+
+```bash
+curl -s localhost:8000/runs -X POST -H 'content-type: application/json' \
+  -d '{"workflow":"creative-review","client":"demo","inputs":{"work_paths":["poster.pdf"],"brief_path":"brief.pdf","discipline":"designer","work_kind":"outdoor"}}'
+```
+
 Post a sponsorship enquiry the way n8n will (set `PERSONAL_AGENT_N8N_SECRET`
 before starting the server; without it the hook answers 503):
 
@@ -124,6 +141,9 @@ the Postgres checkpointer and creates its tables at startup; with a SQLite URL
    owner's criteria, thresholds and amount limit; the Microsoft Graph
    application (read mail and calendar, Outlook drafts, send); the n8n watcher
    itself; an owner-scored evaluation set.
-3. Creative review and drafting: page rendering, image scoring, critique loop.
+3. Creative review and drafting: the creative review graph exists. Still owed:
+   the owner's rubric validation and calibration examples, an owner-scored
+   evaluation set that includes design work, a live run with images, and the
+   strategy drafting graph.
 4. Learning and tools: weekly review of owner edits, skill-library diffs,
    Canva/Higgsfield via MCP, cost screens.

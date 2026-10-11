@@ -37,6 +37,14 @@ class SponsorshipPolicy(BaseModel):
     escalate_above: float | None = None
 
 
+class CreativeReviewSettings(BaseModel):
+    """How pages are rendered and grouped for scoring (config/creative_review.yaml)."""
+
+    image_max_edge: int = 1024
+    pages_per_group: int = 6
+    max_pages: int = 40
+
+
 class Settings(BaseModel):
     database_url: str
     checkpoint_path: Path
@@ -48,6 +56,7 @@ class Settings(BaseModel):
     sponsorship: SponsorshipPolicy | None = None
     # Shared secret for the n8n webhook; None disables the webhook.
     n8n_secret: str | None = None
+    creative_review: CreativeReviewSettings = CreativeReviewSettings()
 
 
 def load_settings() -> Settings:
@@ -69,7 +78,12 @@ def load_settings() -> Settings:
     budgets = Budgets(**yaml.safe_load(budget_path.read_text()))
     policy_path = Path(os.environ.get("PERSONAL_AGENT_SPONSORSHIP", REPO_ROOT / "config" / "sponsorship.yaml"))
     policy = SponsorshipPolicy(**yaml.safe_load(policy_path.read_text())) if policy_path.exists() else None
+    creative_path = Path(
+        os.environ.get("PERSONAL_AGENT_CREATIVE_REVIEW", REPO_ROOT / "config" / "creative_review.yaml")
+    )
+    creative = CreativeReviewSettings(**(yaml.safe_load(creative_path.read_text()) if creative_path.exists() else {}))
     return Settings(
+        creative_review=creative,
         sponsorship=policy,
         n8n_secret=os.environ.get("PERSONAL_AGENT_N8N_SECRET") or None,
         database_url=db,

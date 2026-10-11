@@ -1,0 +1,11 @@
+# Creative review rendering (PRD: model routing and cost).
+# Images are sent at the lowest resolution that keeps the rubric answerable, and
+# pages are scored in groups. Builder's starting values; raise the edge if the
+# model cannot read small type, lower it to cut cost.
+
+# Longest edge of a page image, in pixels.
+image_max_edge: 1024
+# Pages sent to the model in one scoring call.
+pages_per_group: 6
+# A run with more pages than this stops with a clear reason.
+max_pages: 40

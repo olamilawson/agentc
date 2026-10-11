@@ -70,6 +70,26 @@ owner-decided, non-synthetic, complete set of at least fifteen items with no
 failed runs, no missed escalations and nothing released without approval.
 Route agreement gates only if `--min-agreement` is given.
 
+## Creative review set
+
+```bash
+uv run python -m personal_agent.evaluation creative-review --min-agreement 0.8
+```
+
+`sets/creative-review.jsonl` holds, per line, a brief, the work as `pages`
+(one string of copy per page), the `discipline` the feedback is for, a
+`work_kind`, and reference scores on `objective`, `audience`, `tone`,
+`brand_fit` and `craft`. The runner turns the pages into a PDF so the real
+renderer and the image path run. The report gives the share of scores within
+one point, a per-criterion breakdown, and ratings or requests that lack a cited
+page, criterion or location; the gate needs none of those and agreement at the
+owner's level.
+
+The fifteen current items are synthetic, builder-scored and **copy only**: a
+set cannot hold design work as text. The gate set needs the owner's real
+pieces, including layouts and decks, which means extending the item format to
+name files.
+
 ## Safety sets
 
 Two sets must pass in full (PRD: safety sets). Each exits 0 only when every

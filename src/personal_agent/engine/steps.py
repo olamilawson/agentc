@@ -15,6 +15,8 @@ def run_model(
     rubric: str,
     untrusted: list[tuple[str, str]],
     hide: tuple[str, ...] = (),
+    images: list[tuple[str, bytes]] | None = None,
+    examples: list[str] | None = None,
 ) -> tuple[dict, dict]:
     """Returns (validated output, state update carrying the run's usage so far).
 
@@ -25,9 +27,9 @@ def run_model(
     prior = state.get("usage") or {}
     tracker.add_usage(prior.get("tokens_in", 0), prior.get("tokens_out", 0), prior.get("cost_usd", 0.0))
     context, _ = build_context(
-        ROLE, rubric, [], untrusted, {k: v for k, v in payload.items() if k not in hide}
+        ROLE, rubric, examples or [], untrusted, {k: v for k, v in payload.items() if k not in hide}
     )
-    out = h.node_runner(tracker).run(h.contracts[node], payload, context=context)
+    out = h.node_runner(tracker).run(h.contracts[node], payload, context=context, images=images)
     return out, {
         "usage": {
             "tokens_in": tracker.tokens_in,
