@@ -2,7 +2,8 @@
 
 The agent sends approved replies from one Outlook mailbox, reads earlier mail
 with a sender in that mailbox, reads free and busy times from your calendar so a reply can propose a call,
-and creates the calendar event once the sender picks a time and you approve. It signs in as a registered application,
+creates the calendar event once the sender picks a time and you approve, and
+moves or cancels that event when the sender asks and you approve. It signs in as a registered application,
 with no person's password. A tenant administrator does steps 1 to 4; you do
 steps 5 to 7 on the server.
 
@@ -31,8 +32,8 @@ type, and choose:
 
 - `Mail.ReadWrite`: read mail and build the reply as a draft
 - `Mail.Send`: send it
-- `Calendars.ReadWrite`: read free and busy times, and create the event for
-  an agreed call
+- `Calendars.ReadWrite`: read free and busy times, and create, move or cancel
+  the event for a call
 
 Then choose Grant admin consent.
 
@@ -150,12 +151,33 @@ mail to `https://ijeoma.pro/hooks/n8n/sponsorship` with the header
   Teams meeting. It needs a Teams licence on the calendar's mailbox. Without
   it the invitation carries no link.
 
+## How a scheduled call is moved or cancelled
+
+- The agent keeps a list of the calls it has scheduled (`GET /calls`). A mail
+  from a sender with a call on that list may ask to cancel it or to move it.
+- A request to cancel puts the cancellation in your queue. Approving cancels
+  the event, and Microsoft tells the attendee, with the line "Cancelled as
+  you asked." Rejecting leaves the call in place.
+- A request to move gets a reply that proposes two new times; you approve
+  that reply like any other. The call stays at its present time until the
+  sender picks one. Their choice then puts the move in your queue, showing
+  the old time and the new. Approving moves the same event, and Microsoft
+  tells the attendee.
+- Before a move the agent reads the calendar again, and before a move or a
+  cancellation it confirms the call is still on its list. If either fails it
+  changes nothing and says why.
+- A mail about something else, such as a question about the agenda, leaves
+  the call alone and goes through ordinary triage.
+- The agent acts on calls it scheduled. An event you created or changed in
+  your calendar is yours: if you move one of the agent's events by hand, its
+  list still shows the old time.
+
 ## Limits
 
 - One application holds read, draft and send. The gateway's approval rule is
   what keeps a send to approved content; the permissions alone do not.
-- The agent changes and cancels no event. To move or cancel a call, use your
-  calendar.
+- A move or a cancellation starts from the sender's mail. To move or cancel a
+  call yourself, use your calendar.
 - The agent invites one attendee: the sender. Add colleagues in your calendar.
 - The agent knows no public holidays. Block them in your calendar and it
   will skip them.

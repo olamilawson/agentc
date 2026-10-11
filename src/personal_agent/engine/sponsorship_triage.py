@@ -8,7 +8,10 @@
 
 A mail that answers call times the agent proposed takes a short path: if the
 sender chose one of the two times, the owner is asked to approve a calendar
-event with that sender as attendee; if not, the mail is escalated.
+event with that sender as attendee; if not, the mail is escalated. A mail from
+a sender with a call already scheduled may ask to cancel it (the owner approves
+the cancellation) or to move it (the agent proposes two new times, and the
+sender's choice moves the same event once the owner approves).
 
 Routes: pursue, ask for detail, decline, escalate. An escalated enquiry gets no
 reply; the owner receives a summary and the original mail in the queue and
@@ -49,13 +52,14 @@ Criterion = Literal[
 ]
 CRITERIA: tuple[str, ...] = Criterion.__args__
 RiskFlag = Literal["reputational", "political", "legal"]
-ReplyRoute = Literal["pursue", "ask_for_detail", "decline"]
+ReplyRoute = Literal["pursue", "ask_for_detail", "decline", "reschedule"]
 
 _ROUTE_LABELS = {
     "pursue": "Pursue",
     "ask_for_detail": "Ask for detail",
     "decline": "Decline",
     "escalate": "Escalate to the owner",
+    "reschedule": "Propose new call times",
 }
 
 
@@ -73,6 +77,8 @@ class ClassifyIn(BaseModel):
     enquiry_text: str = Field(min_length=1)
     # Call times the agent proposed to this sender earlier and that are still open.
     offered_times: list[str] = []
+    # The call already in the calendar with this sender, if there is one.
+    scheduled_call: str = ""
 
 
 class ClassifyOut(BaseModel):
@@ -87,6 +93,8 @@ class ClassifyOut(BaseModel):
     audience: str | None = None
     # One of the offered call times, word for word, if the mail accepts it.
     chosen_time: str | None = None
+    # What the mail asks of a scheduled call, if anything.
+    call_request: Literal["cancel", "move"] | None = None
 
 
 class CriterionScore(BaseModel):
@@ -181,7 +189,9 @@ def sponsorship_contracts() -> dict[str, StepContract]:
                 "amount as written; give amount_naira as a number only when the amount is in "
                 "naira, otherwise null. Use null for anything the mail does not state. If the inputs "
                 "list offered call times and the mail accepts one of them, give that time word for "
-                "word as chosen_time; if it accepts none, or asks for another time, give null.",
+                "word as chosen_time; if it accepts none, or asks for another time, give null. If the "
+                "inputs name a scheduled call and the mail asks to cancel it or to move it, give "
+                "call_request as cancel or move; otherwise null.",
                 ClassifyOut,
             ),
         ),
@@ -245,7 +255,9 @@ def sponsorship_contracts() -> dict[str, StepContract]:
         "send_and_log": StepContract(
             node="send_and_log",
             tier="cheap",  # code node: runs without a model; the tier is unused
-            allowed_tools=["send_mail", "read_calendar", "create_calendar_event"],
+            allowed_tools=[
+                "send_mail", "read_calendar", "create_calendar_event", "change_calendar_event", "cancel_calendar_event",
+            ],
             input_schema=SendIn,
             output_schema=SendIn,
             instruction="",
@@ -363,7 +375,11 @@ def open_call_proposal(db: Database, sender: str, now: datetime) -> dict | None:
             continue
         slots = [slot for slot in out.get("call_slots") or [] if slot["start"] > moment]
         if slots:
-            return {"run_id": run["id"], "slots": slots, "subject": (run["inputs"] or {}).get("subject") or ""}
+            return {
+                "run_id": run["id"], "slots": slots, "subject": (run["inputs"] or {}).get("subject") or "",
+                # Set when the times were proposed to move a call that already exists.
+                "call_id": (out.get("call") or {}).get("id") if out.get("route") == "reschedule" else None,
+            }
     return None
 
 
@@ -375,11 +391,53 @@ def build_event(policy, slot: dict, attendee: str, proposal: dict) -> dict:
     return {
         "proposal_run_id": proposal["run_id"],
         "label": slot["label"],
-        "start": start.isoformat(),
-        "end": (start + timedelta(minutes=policy.call_minutes)).isoformat(),
+        "start": start.isoformat(timespec="minutes"),
+        "end": (start + timedelta(minutes=policy.call_minutes)).isoformat(timespec="minutes"),
         "attendee": attendee,
         "subject": f"Call: {topic}" if topic else "Call about your sponsorship enquiry",
         "note": f"A call to discuss: {topic}." if topic else "A call to discuss your sponsorship enquiry.",
+    }
+
+
+def moved_event(policy, slot: dict, call: dict, proposal: dict) -> dict:
+    """The same event at a time the sender chose from the agent's new proposal."""
+    start = datetime.fromisoformat(slot["start"])
+    return {
+        "call_id": call["id"], "event_id": call["event_id"], "proposal_run_id": proposal["run_id"],
+        "old_label": call["label"], "label": slot["label"], "start": start.isoformat(timespec="minutes"),
+        "end": (start + timedelta(minutes=policy.call_minutes)).isoformat(timespec="minutes"),
+        "attendee": call["sender"], "subject": call["subject"],
+    }
+
+
+def cancelled_event(call: dict) -> dict:
+    return {
+        "call_id": call["id"], "event_id": call["event_id"], "label": call["label"],
+        "attendee": call["sender"], "subject": call["subject"], "comment": "Cancelled as you asked.",
+    }
+
+
+def move_payload(event: dict) -> dict:
+    """The exact change the owner approves: one event, its old time and its new one."""
+    return {
+        "to": event["attendee"],
+        "subject": f"Move: {event['subject']}",
+        "body": f"From: {event['old_label']}\nTo: {event['label']}\nMicrosoft tells: {event['attendee']}\n",
+        "event_id": event["event_id"],
+        "start": event["start"],
+        "end": event["end"],
+    }
+
+
+def cancel_payload(event: dict) -> dict:
+    """The exact cancellation the owner approves, with the line the attendee reads."""
+    return {
+        "to": event["attendee"],
+        "subject": f"Cancel: {event['subject']}",
+        "body": f"When: {event['label']}\nMicrosoft tells: {event['attendee']}\n\n"
+                f"Message with the cancellation: {event['comment']}\n",
+        "event_id": event["event_id"],
+        "comment": event["comment"],
     }
 
 
@@ -401,6 +459,10 @@ def approval_payload(state: dict) -> dict:
     inputs = state["inputs"]
     if state["route"] == "schedule_call":
         return event_payload(state["event"])
+    if state["route"] == "move_call":
+        return move_payload(state["event"])
+    if state["route"] == "cancel_call":
+        return cancel_payload(state["event"])
     if state["route"] != "escalate":
         return {
             "to": inputs["sender"],
@@ -435,6 +497,18 @@ def approval_notes(state: dict) -> dict:
             "Approving creates the event in your calendar, and Microsoft sends the invitation.",
         ]
         return {"action": "invite", "notes": notes + list(state.get("flags", []))}
+    if state["route"] == "move_call":
+        notes = [
+            "The sender chose this new time from the two you proposed.",
+            "Approving moves the event in your calendar, and Microsoft tells the attendee.",
+        ]
+        return {"action": "move", "notes": notes + list(state.get("flags", []))}
+    if state["route"] == "cancel_call":
+        notes = [
+            "The sender asked to cancel this call.",
+            "Approving cancels the event in your calendar, and Microsoft tells the attendee.",
+        ]
+        return {"action": "cancel", "notes": notes + list(state.get("flags", []))}
     if state["route"] == "escalate":
         notes = [f"Previous enquiries on the ledger: {len(state.get('history', []))}"]
         return {"action": "acknowledge", "notes": notes + list(state.get("flags", []))}
@@ -470,6 +544,7 @@ def sponsorship_outputs(state: dict) -> dict | None:
         "ledger_id": state.get("ledger_id"),
         "call_slots": state.get("call_slots", []),
         "event": state.get("event"),
+        "call": state.get("call"),
         "sent": state.get("sent"),
     }
     if state.get("reply_body"):
@@ -506,6 +581,7 @@ class TriageState(TypedDict, total=False):
     ledger_id: str
     call_slots: list[dict]
     offered: dict
+    call: dict
     event: dict
     reply_subject: str
     reply_body: str
@@ -544,8 +620,11 @@ def build_sponsorship_graph(h):
         text = f"From: {who}\nSubject: {mail['subject']}\n\n{mail['body']}"
         _, found = build_context(ROLE, "", [], [("enquiry", text)], {})
         # Is this an answer to call times the agent proposed to this sender?
-        offered = open_call_proposal(db, mail["sender"], datetime.now(timezone.utc)) or {}
-        return {"inputs": mail, "enquiry_text": text, "offered": offered,
+        now = datetime.now(timezone.utc)
+        offered = open_call_proposal(db, mail["sender"], now) or {}
+        # Is there a call with this sender already in the calendar?
+        call = db.scheduled_call_for(mail["sender"], now.isoformat(timespec="minutes")) or {}
+        return {"inputs": mail, "enquiry_text": text, "offered": offered, "call": call,
                 "flags": list(state.get("flags", [])) + found}
 
     def record_on_ledger(state: TriageState, enquiry: dict, route: str) -> str:
@@ -567,40 +646,62 @@ def build_sponsorship_graph(h):
         return row["id"] if row else db.create_ledger_row(state["run_id"], **fields)
 
     def classify(state: TriageState) -> dict:
-        offered = state.get("offered") or {}
+        offered, call = state.get("offered") or {}, state.get("call") or {}
         labels = [slot["label"] for slot in offered.get("slots", [])]
         out, usage = run_model(
-            "classify", state, {"enquiry_text": state["enquiry_text"], "offered_times": labels}, skill_text
+            "classify", state,
+            {"enquiry_text": state["enquiry_text"], "offered_times": labels, "scheduled_call": call.get("label", "")},
+            skill_text,
         )
-        if labels:
-            # An answer to times the agent proposed. The model may only pick one of
-            # those times; anything else, and the mail goes to the owner as it is.
-            chosen = next((slot for slot in offered["slots"] if slot["label"] == out.get("chosen_time")), None)
-            update: dict = {"enquiry": out, "summary": out["reason"], "history": [], **usage}
-            if chosen and h.mail is not None:
-                update.update({
-                    "route": "schedule_call",
-                    "route_reason": f"The sender chose {chosen['label']}.",
-                    "event": build_event(calendar, chosen, state["inputs"]["sender"], offered),
+        if labels or call:
+            # A mail about a call. The model may only pick one of the times the agent
+            # offered, or say the mail asks to cancel or move the scheduled call; code
+            # decides what follows, and the owner approves any change.
+            chosen = next((slot for slot in offered.get("slots", []) if slot["label"] == out.get("chosen_time")), None)
+            request = out.get("call_request") if call else None
+            route, reason, event = None, "", None
+            if h.mail is None:
+                if labels or request:
+                    route, reason = "escalate", "The mail is about a call, and there is no calendar connection."
+            elif chosen and offered.get("call_id"):
+                if call and call["id"] == offered["call_id"]:
+                    route, event = "move_call", moved_event(calendar, chosen, call, offered)
+                    reason = f"The sender chose {chosen['label']} for the call set for {call['label']}."
+                else:
+                    route, reason = "escalate", "The sender chose a new time for a call that is no longer scheduled."
+            elif chosen:
+                route, event = "schedule_call", build_event(calendar, chosen, state["inputs"]["sender"], offered)
+                reason = f"The sender chose {chosen['label']}."
+            elif request == "cancel":
+                route, event = "cancel_call", cancelled_event(call)
+                reason = f"The sender asked to cancel the call set for {call['label']}."
+            elif request == "move":
+                route, reason = "reschedule", f"The sender asked to move the call set for {call['label']}."
+            elif labels:
+                route, reason = "escalate", "The sender answered your proposed call times without choosing one of them."
+            if route:
+                update: dict = {
+                    "enquiry": out, "summary": out["reason"], "route": route, "route_reason": reason,
+                    "history": [], "correspondence": [], "missing_information": [], **usage,
+                }
+                if event:
+                    update["event"] = event
+                update["ledger_id"] = record_on_ledger(state, out, route)
+                db.audit(state["run_id"], "sponsorship_routed", {
+                    "route": route, "reason": reason, "ledger_id": update["ledger_id"],
                 })
-            else:
-                update.update({
-                    "route": "escalate",
-                    "route_reason": "The sender answered your proposed call times without choosing one of them.",
-                })
-            update["ledger_id"] = record_on_ledger(state, out, update["route"])
-            db.audit(state["run_id"], "sponsorship_routed", {
-                "route": update["route"], "reason": update["route_reason"], "ledger_id": update["ledger_id"],
-            })
-            return update
+                return update
+            # A call is scheduled, and this mail is about something else: ordinary triage.
         if not out["is_sponsorship"]:
             db.audit(state["run_id"], "not_a_sponsorship_request", {"reason": out["reason"]})
             return {"enquiry": out, "route": "not_sponsorship", "route_reason": out["reason"], **usage}
         return {"enquiry": out, **usage}
 
     def after_classify(state: TriageState) -> str:
-        if state.get("route") in ("schedule_call", "escalate"):
-            return "approval"  # an answer to proposed call times: straight to the owner
+        if state.get("route") in ("schedule_call", "move_call", "cancel_call", "escalate"):
+            return "approval"  # about a call: straight to the owner
+        if state.get("route") == "reschedule":
+            return "find_call_dates"  # new times, then a reply that proposes them
         return END if state.get("route") == "not_sponsorship" else "look_up_history"
 
     def look_up_history(state: TriageState) -> dict:
@@ -664,7 +765,7 @@ def build_sponsorship_graph(h):
         start, end = (now, until) if until else scheduling.search_window(calendar, now)
         found = h.tools.call(
             state["run_id"], node, h.contracts[node].allowed_tools, "read_calendar",
-            {"start": start.isoformat(), "end": end.isoformat()},
+            {"start": start.isoformat(timespec="minutes"), "end": end.isoformat()},
         )
         return [(datetime.fromisoformat(a), datetime.fromisoformat(b)) for a, b in found["busy"]]
 
@@ -745,31 +846,50 @@ def build_sponsorship_graph(h):
     def after_approval(state: TriageState) -> str:
         return "approval" if state.get("approval_error") else "send_and_log"
 
-    def schedule_call(state: TriageState) -> dict:
-        # Creating the event sends the invitation: a release, under the same rules as a send.
-        event, now = state["event"], datetime.now(timezone.utc)
-        start = datetime.fromisoformat(event["start"])
+    def release_call(state: TriageState) -> dict:
+        # Creating, moving or cancelling an event tells the attendee at once: each is
+        # a release, under the same rules as a send.
+        route, event, now = state["route"], state["event"], datetime.now(timezone.utc)
+        tool, verb, done = {
+            "schedule_call": ("create_calendar_event", "invitation", f"invitation sent for {event['label']}"),
+            "move_call": ("change_calendar_event", "change", f"call moved to {event['label']}"),
+            "cancel_call": ("cancel_calendar_event", "cancellation", f"call cancelled ({event['label']})"),
+        }[route]
         tools = h.contracts["send_and_log"].allowed_tools
         try:
-            busy = read_busy(state, "send_and_log", now, until=max(start, now) + timedelta(days=1))
-            if not scheduling.still_free(calendar, [{"start": event["start"]}], busy, now):
-                return {"approval_error": "That time is no longer free in the calendar, or has passed. Free it and "
-                                          "approve again, or reject this item and answer the sender yourself."}
-            created = h.tools.call(state["run_id"], "send_and_log", tools, "create_calendar_event", approval_payload(state))
+            if route != "schedule_call":
+                call = db.get_call(event["call_id"])
+                if not call or call["status"] != "scheduled" or call["event_id"] != event["event_id"]:
+                    return {"approval_error": "That call is no longer scheduled, so there is nothing to change. "
+                                              "Reject this item."}
+            if route != "cancel_call":
+                start = datetime.fromisoformat(event["start"])
+                busy = read_busy(state, "send_and_log", now, until=max(start, now) + timedelta(days=1))
+                if not scheduling.still_free(calendar, [{"start": event["start"]}], busy, now):
+                    return {"approval_error": "That time is no longer free in the calendar, or has passed. Free it and "
+                                              "approve again, or reject this item and answer the sender yourself."}
+            result = h.tools.call(state["run_id"], "send_and_log", tools, tool, approval_payload(state))
         except (ApprovalRequired, ApprovalLapsed) as e:
             return {"approval_error": str(e)}
         except GraphError as e:
-            db.update_ledger_row(state["ledger_id"], outcome=f"invitation failed, nothing sent: {e}")
-            return {"approval_error": f"The invitation was not sent: {e}. Approve again to retry."}
+            db.update_ledger_row(state["ledger_id"], outcome=f"{verb} failed, nothing changed: {e}")
+            return {"approval_error": f"The {verb} did not go through: {e}. Approve again to retry."}
         except UncertainOutcome as e:
             db.update_ledger_row(
-                state["ledger_id"], decision="call approved by owner", outcome=f"invitation outcome unknown: {e}"
+                state["ledger_id"], decision="call approved by owner", outcome=f"{verb} outcome unknown: {e}"
             )
             raise
-        db.update_ledger_row(
-            state["ledger_id"], decision="call approved by owner", outcome=f"invitation sent for {event['label']}"
-        )
-        return {"sent": created, "approval_error": None, "error": None}
+        if route == "schedule_call":
+            db.create_call(
+                state["run_id"], result.get("event_id"), event["attendee"], event["subject"],
+                event["start"], event["end"], event["label"],
+            )
+        elif route == "move_call":
+            db.update_call(event["call_id"], start=event["start"], end=event["end"], label=event["label"])
+        else:
+            db.update_call(event["call_id"], status="cancelled")
+        db.update_ledger_row(state["ledger_id"], decision="call approved by owner", outcome=done)
+        return {"sent": result, "approval_error": None, "error": None}
 
     def send_and_log(state: TriageState) -> dict:
         if state["route"] == "escalate":
@@ -777,8 +897,8 @@ def build_sponsorship_graph(h):
                 state["ledger_id"], decision="escalated to owner", outcome="acknowledged; no reply sent"
             )
             return {"approval_error": None, "error": None}
-        if state["route"] == "schedule_call":
-            return schedule_call(state)
+        if state["route"] in ("schedule_call", "move_call", "cancel_call"):
+            return release_call(state)
         payload = h.contracts["send_and_log"].validate_input(approval_payload(state))
         if state.get("call_slots"):
             # Approval can come hours after the times were found: confirm them before sending.
@@ -836,7 +956,8 @@ def build_sponsorship_graph(h):
     builder.add_edge(START, "new_enquiry")
     builder.add_edge("new_enquiry", "classify")
     builder.add_conditional_edges(
-        "classify", after_classify, {END: END, "look_up_history": "look_up_history", "approval": "approval"}
+        "classify", after_classify,
+        {END: END, "look_up_history": "look_up_history", "approval": "approval", "find_call_dates": "find_call_dates"},
     )
     builder.add_edge("look_up_history", "score_and_route")
     builder.add_conditional_edges(

@@ -315,6 +315,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             })
         return db.get_ledger_row(ledger_id)
 
+    @app.get("/calls")
+    def calls() -> list[dict]:
+        # Calls the agent has put in the calendar, with their state.
+        return db.list_calls()
+
     @app.get("/outbox")
     def outbox() -> list[dict]:
         # Approved mail held locally because Microsoft Graph is not connected.
@@ -834,6 +839,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 "send": "Approve and send this reply",
                 "acknowledge": "Acknowledge, send nothing",
                 "invite": "Approve and send this invitation",
+                "move": "Approve and move this call",
+                "cancel": "Approve and cancel this call",
                 "outline": "Approve outline and start the draft",
                 "save": "Approve and save this document",
             }.get(item.get("action"), "Approve and release this content")

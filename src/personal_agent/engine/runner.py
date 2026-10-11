@@ -108,6 +108,8 @@ class Harness:
         # Release-class: an event with an attendee. Creating it sends the invitation,
         # so it needs an approval matching the exact event, like any send.
         self.tools.register(ToolSpec(name="create_calendar_event", cls=ToolClass.RELEASE, fn=self._create_event))
+        self.tools.register(ToolSpec(name="change_calendar_event", cls=ToolClass.RELEASE, fn=self._change_event))
+        self.tools.register(ToolSpec(name="cancel_calendar_event", cls=ToolClass.RELEASE, fn=self._cancel_event))
         # Read-class: when the owner's calendar is busy. Free and busy times only.
         self.tools.register(ToolSpec(name="read_calendar", cls=ToolClass.READ, fn=self._read_calendar))
         # Draft-class: a document in the run's own client folder (reversible).
@@ -173,6 +175,18 @@ class Harness:
             transaction_id=content_hash(payload)[:36],
             online=self.settings.calendar.online_meeting,
         )
+
+    def _change_event(self, payload: dict) -> dict:
+        if self.mail is None:
+            raise GraphError("there is no calendar connection")
+        return self.mail.change_event(
+            payload["event_id"], datetime.fromisoformat(payload["start"]), datetime.fromisoformat(payload["end"])
+        )
+
+    def _cancel_event(self, payload: dict) -> dict:
+        if self.mail is None:
+            raise GraphError("there is no calendar connection")
+        return self.mail.cancel_event(payload["event_id"], payload["comment"])
 
     def _read_calendar(self, payload: dict) -> dict:
         if self.mail is None:

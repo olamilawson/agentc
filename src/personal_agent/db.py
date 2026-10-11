@@ -134,6 +134,24 @@ client_settings = Table(
     Column("updated_at", String),
 )
 
+# Calls the agent has put in the owner's calendar, so a later mail from the
+# same sender can move or cancel the right event.
+calls = Table(
+    "calls",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("run_id", String, index=True),  # the run that created the event
+    Column("event_id", String),  # Microsoft Graph's id for the event
+    Column("sender", String, index=True),
+    Column("subject", String),
+    Column("start", String),
+    Column("end", String),
+    Column("label", String),
+    Column("status", String),  # scheduled | cancelled
+    Column("created_at", String),
+    Column("updated_at", String),
+)
+
 # Clients whose runs may only reach providers approved for confidential work.
 # A row means restricted; no row means not.
 restricted_clients = Table(
@@ -391,6 +409,44 @@ class Database:
             cx.execute(update(approvals).where(approvals.c.run_id == run_id).values(comment=None))
             cx.execute(delete(owner_edits).where(owner_edits.c.run_id == run_id))
             cx.execute(delete(sponsorship_ledger).where(sponsorship_ledger.c.run_id == run_id))
+            cx.execute(delete(calls).where(calls.c.run_id == run_id))
+
+    # --- scheduled calls ---------------------------------------------------------------
+    def create_call(self, run_id: str, event_id: str, sender: str, subject: str, start: str, end: str,
+                    label: str) -> str:
+        call_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(
+                insert(calls).values(
+                    id=call_id, run_id=run_id, event_id=event_id, sender=sender, subject=subject, start=start,
+                    end=end, label=label, status="scheduled", created_at=now(), updated_at=now(),
+                )
+            )
+        return call_id
+
+    def update_call(self, call_id: str, **fields) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(calls).where(calls.c.id == call_id).values(**fields, updated_at=now()))
+
+    def get_call(self, call_id: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(select(calls).where(calls.c.id == call_id)).mappings().first()
+        return dict(row) if row else None
+
+    def list_calls(self) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(select(calls).order_by(calls.c.start.desc())).mappings()]
+
+    def scheduled_call_for(self, sender: str, after: str) -> dict | None:
+        """The next call still scheduled with this sender that starts after the given moment."""
+        stmt = (
+            select(calls)
+            .where(func.lower(calls.c.sender) == sender.lower(), calls.c.status == "scheduled", calls.c.start > after)
+            .order_by(calls.c.start)
+        )
+        with self.engine.connect() as cx:
+            row = cx.execute(stmt).mappings().first()
+        return dict(row) if row else None
 
     # --- trace: run steps and model calls ------------------------------------------
     def _next_seq(self, cx, run_id: str) -> int:

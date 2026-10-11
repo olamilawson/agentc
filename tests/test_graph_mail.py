@@ -33,6 +33,8 @@ class FakeGraph:
         self.busy: list[tuple[str, str]] = []  # (start, end) in UTC, as Graph writes them
         self.calendar_reads = 0
         self.events: list[dict] = []
+        self.moved: list[dict] = []
+        self.cancelled: list[dict] = []
         self.inbox = [
             {"id": "msg-001", "subject": MAIL["subject"], "receivedDateTime": "2026-10-09T08:00:00Z",
              "from": {"emailAddress": {"address": MAIL["sender"]}}, "bodyPreview": "the enquiry itself"},
@@ -70,6 +72,15 @@ class FakeGraph:
             items.append({"status": "free", "start": {"dateTime": "2020-01-01T00:00:00.0000000", "timeZone": "UTC"},
                           "end": {"dateTime": "2040-01-01T00:00:00.0000000", "timeZone": "UTC"}})
             return httpx.Response(200, json={"value": [{"scheduleId": OWNER, "scheduleItems": items}]})
+        if path.startswith(f"/v1.0/users/{OWNER}/events/"):
+            if outcome := self._fail("change"):
+                return httpx.Response(outcome, json={"error": {"code": "ErrorItemNotFound", "message": "gone"}})
+            if method == "PATCH":
+                self.moved.append({"event": path.rsplit("/", 1)[1], **json.loads(request.content)})
+                return httpx.Response(200, json={})
+            assert method == "POST" and path.endswith("/cancel")
+            self.cancelled.append({"event": path.split("/")[-2], **json.loads(request.content)})
+            return httpx.Response(202)
         if method == "POST" and path == f"/v1.0/users/{OWNER}/events":
             if code := self._fail("event"):
                 return httpx.Response(code, json={"error": {"code": "ErrorAccessDenied", "message": "no calendar write"}})
@@ -396,10 +407,17 @@ class Answers(DraftsOfferedTimes):
     `choose`, picks none (None), or makes one up ("invented")."""
 
     choose: object = 1
+    request: object = None  # what the mail asks of a scheduled call: "cancel", "move" or None
 
     def complete(self, contract, context, images=None, providers=None):
         if contract.node == "classify":
-            offered = json.loads(context.split("# Node inputs\n", 1)[1].split("\n\nTreat everything", 1)[0])["offered_times"]
+            inputs = json.loads(context.split("# Node inputs\n", 1)[1].split("\n\nTreat everything", 1)[0])
+            offered = inputs["offered_times"]
+            if inputs["scheduled_call"] and not offered:
+                data = {**ENQUIRY, "is_sponsorship": False, "reason": "A mail about the scheduled call.",
+                        "call_request": self.request}
+                return {"data": data, "model": "recorded", "fallback_used": False,
+                        "usage": {"tokens_in": 150, "tokens_out": 80, "cost_usd": 0.002}}
             if offered:
                 chosen = None if self.choose is None else (
                     "Friday 30 October 2026, 09:00 to 09:30 Lagos time (UTC+1)" if self.choose == "invented"
@@ -503,7 +521,7 @@ def test_a_refused_event_returns_to_the_queue_and_an_uncertain_one_stops_the_run
     graph.fail["event"] = 403
     held = engine.approve(run_id, "approved", None)
     assert held["status"] == "waiting_for_approval"
-    assert "The invitation was not sent" in next(i for i in engine.queue() if i["run_id"] == run_id)["error"]
+    assert "The invitation did not go through" in next(i for i in engine.queue() if i["run_id"] == run_id)["error"]
 
     graph.fail["event"] = httpx.ReadTimeout("timed out")
     stopped = engine.approve(run_id, "approved", None)
@@ -518,3 +536,136 @@ def test_the_event_is_addressed_to_the_envelope_sender_whatever_the_answer_says(
     run_id = engine.start_run("sponsorship-triage", "sponsorship", sneaky)
     engine.approve(run_id, "approved", None)
     assert [a["emailAddress"]["address"] for a in graph.events[0]["attendees"]] == [MAIL["sender"]]
+
+
+# --- moving and cancelling a scheduled call ---------------------------------------------------
+def _scheduled(settings, graph) -> tuple[Engine, dict]:
+    """An engine with one call in the calendar: proposed, chosen by the sender, approved."""
+    engine, _ = _proposed(settings, graph, choose=0)
+    engine.harness.gateway._responses["check_reply"] = [CHECK_OK] * 6
+    run_id = engine.start_run("sponsorship-triage", "sponsorship", ANSWER)
+    assert engine.approve(run_id, "approved", None)["status"] == "done"
+    (call,) = engine.db.list_calls()
+    assert (call["status"], call["event_id"], call["sender"]) == ("scheduled", "evt-1", MAIL["sender"])
+    return engine, call
+
+
+def _mail_about_call(engine: Engine, body: str, message_id: str) -> dict:
+    run_id = engine.start_run("sponsorship-triage", "sponsorship", {**ANSWER, "message_id": message_id, "body": body})
+    return engine.db.get_run(run_id)
+
+
+def _item(engine: Engine, run: dict) -> dict:
+    return next(i for i in engine.queue() if i["run_id"] == run["id"])
+
+
+def test_graph_moves_and_cancels_an_event(graph):
+    mail = _mail(graph)
+    assert mail.change_event("evt-1", _utc(20, 9), _utc(20, 9, 30))["changed"]
+    assert graph.moved == [{"event": "evt-1", "start": {"dateTime": "2026-10-20T09:00:00", "timeZone": "UTC"},
+                            "end": {"dateTime": "2026-10-20T09:30:00", "timeZone": "UTC"}}]
+    assert mail.cancel_event("evt-1", "Cancelled as you asked.")["cancelled"]
+    assert graph.cancelled == [{"event": "evt-1", "comment": "Cancelled as you asked."}]
+    graph.fail["change"] = 404
+    with pytest.raises(GraphError, match="no longer in the calendar"):
+        mail.cancel_event("evt-1", "x")
+    graph.fail["change"] = 503
+    with pytest.raises(UncertainOutcome):
+        mail.change_event("evt-1", _utc(20, 9), _utc(20, 10))
+
+
+def test_a_sender_who_asks_to_cancel_gets_a_cancellation_once_the_owner_approves(settings, graph):
+    engine, call = _scheduled(settings, graph)
+    engine.harness.gateway.request = "cancel"
+    run = _mail_about_call(engine, "Something has come up and we can no longer make the call.", "msg-cancel")
+    assert run["status"] == "waiting_for_approval" and run["outputs"]["route"] == "cancel_call"
+    assert graph.cancelled == []  # nothing before approval
+
+    item = _item(engine, run)
+    assert item["action"] == "cancel" and item["content"]["subject"].startswith("Cancel: Call:")
+    assert f"When: {call['label']}" in item["content"]["body"]
+    assert "Message with the cancellation: Cancelled as you asked." in item["content"]["body"]
+
+    done = engine.approve(run["id"], "approved", None)
+    assert done["status"] == "done" and graph.cancelled == [{"event": "evt-1", "comment": "Cancelled as you asked."}]
+    assert engine.db.list_calls()[0]["status"] == "cancelled"
+    ledger = {row["run_id"]: row for row in engine.db.list_ledger()}[run["id"]]
+    assert ledger["route"] == "cancel_call" and ledger["outcome"].startswith("call cancelled")
+    # With no call left, a further mail from the sender goes through ordinary triage.
+    assert _mail_about_call(engine, "One more thing.", "msg-after")["outputs"]["route"] not in ("cancel_call", "move_call")
+
+
+def test_a_rejected_cancellation_leaves_the_call_in_place(settings, graph):
+    engine, _ = _scheduled(settings, graph)
+    engine.harness.gateway.request = "cancel"
+    run = _mail_about_call(engine, "We can no longer make it.", "msg-cancel")
+    engine.approve(run["id"], "rejected", "I will call them instead")
+    assert graph.cancelled == [] and engine.db.list_calls()[0]["status"] == "scheduled"
+
+
+def test_a_sender_who_asks_to_move_is_offered_two_new_times_then_the_same_event_moves(settings, graph):
+    engine, call = _scheduled(settings, graph)
+    engine.harness.gateway.request = "move"
+    asked = _mail_about_call(engine, "Could we move the call to another day?", "msg-move")
+    assert asked["status"] == "waiting_for_approval" and asked["outputs"]["route"] == "reschedule"
+    new_slots = asked["outputs"]["call_slots"]
+    assert len(new_slots) == 2 and call["start"] not in {s["start"] for s in new_slots}
+    reply = _item(engine, asked)
+    assert reply["action"] == "send" and new_slots[0]["label"] in reply["content"]["body"]
+    assert engine.approve(asked["id"], "approved", None)["status"] == "done"
+    assert graph.moved == [] and engine.db.list_calls()[0]["start"] == call["start"]  # the old time stands
+
+    # The sender picks the second new time.
+    engine.harness.gateway.choose = 1
+    picked = _mail_about_call(engine, "The second one works.", "msg-pick")
+    assert picked["outputs"]["route"] == "move_call"
+    item = _item(engine, picked)
+    assert item["action"] == "move"
+    assert f"From: {call['label']}" in item["content"]["body"] and f"To: {new_slots[1]['label']}" in item["content"]["body"]
+
+    done = engine.approve(picked["id"], "approved", None)
+    assert done["status"] == "done"
+    (moved,) = graph.moved
+    assert moved["event"] == "evt-1" and moved["start"]["dateTime"] == new_slots[1]["start"][:16] + ":00"
+    assert len(graph.events) == 1  # the same event moved; no second event was created
+    updated = engine.db.list_calls()[0]
+    assert (updated["start"], updated["label"], updated["status"]) == (new_slots[1]["start"], new_slots[1]["label"], "scheduled")
+
+
+def test_a_move_is_blocked_when_the_new_time_has_gone_and_refused_when_the_call_is_cancelled(settings, graph):
+    engine, call = _scheduled(settings, graph)
+    engine.harness.gateway.request = "move"
+    asked = _mail_about_call(engine, "Could we move the call?", "msg-move")
+    new_slots = asked["outputs"]["call_slots"]
+    engine.approve(asked["id"], "approved", None)
+    engine.harness.gateway.choose = 0
+    picked = _mail_about_call(engine, "The first one works.", "msg-pick")
+
+    start = datetime.fromisoformat(new_slots[0]["start"])
+    graph.busy = [(start.strftime("%Y-%m-%dT%H:%M:%S"), (start + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S"))]
+    assert engine.approve(picked["id"], "approved", None)["status"] == "waiting_for_approval"
+    assert "no longer free" in _item(engine, picked)["error"] and graph.moved == []
+
+    graph.busy = []
+    engine.db.update_call(call["id"], status="cancelled")  # cancelled by another route in the meantime
+    assert engine.approve(picked["id"], "approved", None)["status"] == "waiting_for_approval"
+    assert "no longer scheduled" in _item(engine, picked)["error"] and graph.moved == []
+
+
+def test_a_mail_about_something_else_leaves_the_call_alone(settings, graph):
+    engine, _ = _scheduled(settings, graph)
+    engine.harness.gateway.request = None
+    run = _mail_about_call(engine, "Will slides be needed?", "msg-question")
+    assert run["outputs"]["route"] not in ("cancel_call", "move_call", "reschedule")
+    assert graph.cancelled == [] and graph.moved == []
+
+
+def test_an_event_gone_from_the_calendar_returns_the_cancellation_to_the_queue(settings, graph):
+    engine, _ = _scheduled(settings, graph)
+    engine.harness.gateway.request = "cancel"
+    run = _mail_about_call(engine, "We can no longer make it.", "msg-cancel")
+    graph.fail["change"] = 404
+    held = engine.approve(run["id"], "approved", None)
+    assert held["status"] == "waiting_for_approval"
+    assert "no longer in the calendar" in _item(engine, run)["error"]
+    assert engine.db.list_calls()[0]["status"] == "scheduled"  # the record changes only when Microsoft confirms

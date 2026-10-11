@@ -97,8 +97,26 @@ matches the exact event, like a send.
   `transactionId` derived from the approved content, so Microsoft creates the
   same event once even if the request repeats. A transport failure or 5xx is
   still treated as uncertain and stops the run.
-- Changing and cancelling events are not built. The PRD lists "create or
-  change"; no step of any graph changes one.
+
+## Update, 2026-10-11: moving and cancelling a call
+
+`change_calendar_event` and `cancel_calendar_event` are release-class tools
+under the same approval rule. A `calls` table records each event the agent
+creates, so a later mail can be tied to the right one.
+
+- Classify may say a mail asks to cancel or to move the sender's scheduled
+  call. Cancel goes to the owner as a cancellation to approve. Move sends the
+  run to `find call dates` and a reschedule reply; the sender's choice from
+  that reply becomes a move of the same event, not a second event.
+- The event, its attendee and its times come from the `calls` table and the
+  agent's own proposal. The cancellation message is fixed text. Nothing from
+  the mail's body reaches Microsoft.
+- The `calls` row changes only after Microsoft confirms. A 404 from Graph
+  (the event was deleted by hand) is a definite failure and returns the item
+  to the queue.
+- Only sender-initiated changes are built. An owner-initiated move or cancel
+  would need an entry point other than a mail, and the calendar already
+  serves that.
 
 ## Other choices
 

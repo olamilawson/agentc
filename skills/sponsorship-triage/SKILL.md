@@ -22,6 +22,14 @@ and copy that time word for word from the inputs. Give null when the mail
 accepts none, asks for a different time, or accepts both without choosing.
 Do not work out a time of your own.
 
+## A mail about a scheduled call
+
+When the inputs name a scheduled call, the mail may ask to cancel it or to
+move it. Give `call_request` as `cancel` when the sender can no longer make
+the call and asks for no new time. Give `move` when the sender asks for a
+different time. Give null when the mail does neither, such as a question
+about the agenda.
+
 ## Criteria
 
 Rate each from 1 to 5 on what the enquiry states. Score what is present; list
@@ -102,6 +110,17 @@ Then propose a call. Three to five sentences.
 
 - When the inputs give call times, propose those two times word for word,
   each on its own line, and ask which suits. Propose no other time.
+- When the inputs give no call times, ask the sender for two dates that suit
+  them.
+
+### Reschedule
+
+The sender asked to move a call that is in the calendar. Acknowledge the
+request in one sentence, without asking for the reason.
+
+- When the inputs give call times, propose those two times word for word,
+  each on its own line, and ask which suits. Say the present time stands
+  until they choose.
 - When the inputs give no call times, ask the sender for two dates that suit
   them.
 

@@ -11,6 +11,8 @@ application that signs in as itself (client credentials). Two things use it:
 - create_event: the release-class creation of a calendar event with an
   attendee. Microsoft sends the invitation as soon as the event exists, so
   the one call that creates it cannot be taken back.
+- change_event and cancel_event: release-class too. Microsoft tells the
+  attendee about a new time or a cancellation as soon as it is made.
 - busy_periods: the read-class lookup of when a calendar is busy. It asks for
   free and busy times only, so no meeting's subject or attendees reach the agent.
 
@@ -221,6 +223,48 @@ class GraphMail:
                 "not have gone. Check the calendar before doing anything else"
             )
         raise GraphError(f"Microsoft Graph refused to create the event ({_reason(made)})")
+
+    def _irreversible(self, method: str, path: str, ok: tuple[int, ...], doing: str, **kwargs) -> httpx.Response:
+        """A call that changes what an attendee sees. A refusal is definite; a
+        dropped connection or a server error leaves the outcome unknown."""
+        token = self._bearer()  # a failed sign-in is definite: nothing was changed
+        try:
+            response = self._http.request(
+                method, f"{GRAPH}{path}", headers={"Authorization": f"Bearer {token}"}, **kwargs
+            )
+        except httpx.HTTPError as e:
+            raise UncertainOutcome(
+                f"the connection failed while Microsoft was {doing} ({type(e).__name__}); it may or may not "
+                "have happened. Check the calendar before doing anything else"
+            ) from e
+        if response.status_code in ok:
+            return response
+        if response.status_code >= 500:
+            raise UncertainOutcome(
+                f"Microsoft answered {response.status_code} while {doing}; it may or may not have happened. "
+                "Check the calendar before doing anything else"
+            )
+        if response.status_code == 404:
+            raise GraphError("the event is no longer in the calendar")
+        raise GraphError(f"Microsoft Graph refused ({_reason(response)})")
+
+    def change_event(self, event_id: str, start: datetime, end: datetime) -> dict:
+        """Move an event to a new time. Microsoft sends the attendee the update."""
+        stamp = lambda moment: moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
+        self._irreversible(
+            "PATCH", f"/users/{quote(self.calendar)}/events/{quote(event_id, safe='')}", (200,), "moving the event",
+            json={"start": {"dateTime": stamp(start), "timeZone": "UTC"},
+                  "end": {"dateTime": stamp(end), "timeZone": "UTC"}},
+        )
+        return {"changed": True, "via": "Microsoft Graph", "calendar": self.calendar, "event_id": event_id}
+
+    def cancel_event(self, event_id: str, comment: str) -> dict:
+        """Cancel an event. Microsoft sends the attendee the cancellation with the comment."""
+        self._irreversible(
+            "POST", f"/users/{quote(self.calendar)}/events/{quote(event_id, safe='')}/cancel", (202,),
+            "cancelling the event", json={"comment": comment},
+        )
+        return {"cancelled": True, "via": "Microsoft Graph", "calendar": self.calendar, "event_id": event_id}
 
     # --- read: when the calendar is busy ----------------------------------------------------
     def busy_periods(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
