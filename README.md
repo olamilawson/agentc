@@ -31,6 +31,21 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Sign-in** — one owner, a password and a one-time code from an
+  authenticator app (`src/personal_agent/auth.py`). With the three login
+  secrets set, every route needs a session except `/health`, `/login` and the
+  mail watcher's hook. Five failed attempts lock sign-in for fifteen minutes.
+  On the server (`PERSONAL_AGENT_REQUIRE_LOGIN=1`, set in the compose file) the
+  app refuses every request until the secrets exist; on a developer's machine
+  with none set it serves open. Create the secrets with
+  `python -m personal_agent.auth`.
+- **Interface** — the five screens share one shell and stylesheet
+  (`src/personal_agent/api/ui.py`), following the owner's Stitch design for
+  Chidimma OS: a dark rail, a slate canvas, white cards, a serif for display.
+  Four of that design's colours were darkened to meet contrast minimums; the
+  file lists each with its measured ratio. No web font is fetched.
+- **Going live** — `deploy/go-live.md` is the checklist for ijeoma.pro on the
+  Hostinger VPS.
 - **Restricted clients** — a client marked restricted on `/files` has its runs
   limited to the providers listed in `config/providers.yaml` as approved for
   confidential work. The check is in the model gateway: a model from any other

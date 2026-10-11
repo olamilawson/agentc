@@ -248,7 +248,7 @@ def test_webhook_needs_the_shared_secret_and_starts_one_run_per_mail(settings):
     assert len(client.get("/runs").json()) == 1
 
     page = client.get("/queue").text
-    assert "Approve — send exactly this reply" in page and f"To: {MAIL['sender']}" in page
+    assert "Approve and send this reply" in page and f"To: {MAIL['sender']}" in page
 
 
 def test_webhook_is_off_until_a_secret_is_configured(settings):

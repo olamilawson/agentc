@@ -1,4 +1,4 @@
-"""Web app / API — Foundation phase.
+"""Web app and API.
 
 The approval queue is the heart: every outbound action waits here, the exact
 content is shown before anything can be released, and an approval matches the
@@ -10,15 +10,19 @@ from __future__ import annotations
 
 import hmac
 import json
+from datetime import datetime, timedelta, timezone
 from html import escape
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from personal_agent.api import ui
+from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
-from personal_agent import costs, learning, retention, tracing
+from personal_agent import auth, costs, learning, retention, tracing
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
@@ -77,11 +81,6 @@ class LedgerCorrection(BaseModel):
     outcome: str | None = None
 
 
-NAV = (
-    '<nav><a href="/queue">Approval queue</a> <a href="/inspect">Runs</a> <a href="/files">Clients</a> '
-    '<a href="/library">Skill library</a> <a href="/cost">Settings and cost</a></nav>'
-)
-
 # Read aloud on the queue page, with the browser's own speech synthesis. Only an
 # on-device voice is used: some browsers also offer network voices, which would
 # send the text of a draft to the voice's provider.
@@ -131,32 +130,6 @@ READ_ALOUD_SCRIPT = """<script>
 })();
 </script>"""
 
-PAGE_STYLE = """
- body { font-family: Georgia, serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #faf9f6; }
- h1 { border-bottom: 2px solid #1a1a1a; }
- nav a { margin-right: 1rem; font-size: .9rem; }
- .meta { color: #666; font-size: .85rem; }
- .total { font-size: 2rem; margin: .5rem 0; }
- .month a { margin: 0 .75rem; }
- table { border-collapse: collapse; width: 100%; font-size: .9rem; }
- th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }
- .bar { background: #e6e3da; border-radius: 6px; height: .6rem; margin-top: .3rem; }
- .fill { height: 100%; border-radius: 6px; background: #1a5c3f; }
- .fill.alert { background: #b7791f; }
- .fill.stopped { background: #7a2c22; }
- .banner { background: #fbf1d9; border: 1px solid #b7791f; border-radius: 6px; padding: .6rem .8rem; margin: 1rem 0; }
- .banner.stop { background: #f8e3df; border-color: #7a2c22; }
- .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: .6rem 1rem; margin: .75rem 0; }
- .card h3 { margin: .2rem 0; }
- .call { border-left: 3px solid #e6e3da; padding-left: .75rem; margin: .5rem 0; }
- pre { white-space: pre-wrap; background: #f4f3ef; padding: .75rem; border-radius: 6px; overflow-x: auto; font-size: .8rem; }
- .error { color: #b3261e; }
- details { margin: .3rem 0; }
- [class^="s-"] { font-size: .8rem; font-weight: normal; padding: .1rem .4rem; border-radius: 4px; background: #e6e3da; }
- .s-done { background: #dcebe3; } .s-failed, .s-cancelled { background: #f8e3df; }
- .s-waiting, .s-waiting_for_approval, .s-waiting_for_input { background: #fbf1d9; }
-"""
-
 
 def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None) -> FastAPI:
     settings = settings or load_settings()
@@ -164,6 +137,88 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     engine = Engine(settings, db, gateway=gateway)
 
     app = FastAPI(title="Personal Agent", version="0.1.0 (foundation)")
+
+    # --- sign-in ----------------------------------------------------------------------
+    # With the three login secrets set, every route needs a session except the
+    # health check, the sign-in page and the mail watcher's hook (which has its
+    # own secret). With none set, a server refuses every request; a developer's
+    # machine serves open.
+    guard = (
+        auth.LoginGuard(settings.owner_password_hash, settings.totp_secret, settings.session_secret, settings.session_hours)
+        if settings.owner_password_hash and settings.totp_secret and settings.session_secret
+        else None
+    )
+
+    @app.middleware("http")
+    async def require_session(request: Request, call_next):
+        path = request.url.path
+        if path in ("/health", "/login") or path.startswith("/hooks/"):
+            return await call_next(request)
+        if guard is None:
+            if settings.require_login:
+                return PlainTextResponse(
+                    "Sign-in is not set up on this server. Run `python -m personal_agent.auth` there "
+                    "and add its three lines to .env.", status_code=503,
+                )
+            return await call_next(request)
+        if not guard.valid_session(request.cookies.get(auth.SESSION_COOKIE)):
+            if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+                return RedirectResponse(f"/login?next={quote(path)}", status_code=303)
+            return JSONResponse({"detail": "sign in first"}, status_code=401)
+        # A signed-in browser must send changes from this site, not from another page.
+        origin = request.headers.get("origin")
+        if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
+            if urlsplit(origin).netloc != request.headers.get("host"):
+                return PlainTextResponse("This request came from another site, so the agent refused it.", status_code=403)
+        return await call_next(request)
+
+    @app.get("/login", response_class=HTMLResponse)
+    def sign_in(next: str = "/queue"):
+        if guard is None:
+            return RedirectResponse("/queue", status_code=303)
+        return ui.sign_in_page(settings.brand_name, next_path=next)
+
+    @app.post("/login")
+    async def sign_in_submit(request: Request):
+        if guard is None:
+            return RedirectResponse("/queue", status_code=303)
+        form = await request.form()
+        target = str(form.get("next") or "/queue")
+        if not target.startswith("/") or target.startswith("//"):
+            target = "/queue"  # never redirect off this site
+        if guard.locked():
+            return HTMLResponse(ui.sign_in_page(
+                settings.brand_name, "Five failed attempts locked sign-in. Try again in 15 minutes.", target
+            ), status_code=429)
+        if not guard.check(str(form.get("password", "")), str(form.get("code", ""))):
+            db.audit(None, "login_failed", {"locked": guard.locked()})
+            return HTMLResponse(ui.sign_in_page(
+                settings.brand_name, "The password or the code did not match. Try again.", target
+            ), status_code=401)
+        db.audit(None, "login_succeeded", None)
+        response = RedirectResponse(target, status_code=303)
+        response.set_cookie(
+            auth.SESSION_COOKIE, guard.new_session(), max_age=settings.session_hours * 3600,
+            httponly=True, samesite="lax", secure=settings.require_login, path="/",
+        )
+        return response
+
+    @app.post("/logout")
+    def sign_out():
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(auth.SESSION_COOKIE, path="/")
+        return response
+
+    def render(title: str, active: str, body: str, script: str = "") -> str:
+        waiting = len(db.list_runs(status="waiting_for_approval")) + len(db.list_runs(status="waiting_for_input"))
+        return ui.page(
+            title, active, body, brand=settings.brand_name, waiting=waiting,
+            signed_in=guard is not None, script=script,
+        )
+
+    @app.get("/")
+    def home():
+        return RedirectResponse("/queue", status_code=303)
 
     @app.get("/health")
     def health() -> dict:
@@ -393,55 +448,51 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     @app.get("/files", response_class=HTMLResponse)
     def clients_page() -> str:
         cards = []
-        approved = (
-            escape(", ".join(settings.confidential_providers))
-            if settings.confidential_providers
-            else "no provider yet (none is approved for confidential work, so its runs stop at the first model step)"
+        providers = escape(", ".join(settings.confidential_providers))
+        restricted_line = (
+            f'<span class="s-waiting">Restricted</span> Its runs go to {providers} and no other provider.'
+            if providers else
+            '<span class="s-waiting">Restricted</span> You have approved no provider for confidential work, '
+            "so its runs stop at the first model step."
         )
         for name in engine.harness.clients.list_clients():
             c = _client_view(name)
-            kept = "until you delete the client" if c["retention_days"] is None else f"{c['retention_days']} days"
+            kept = "until you delete the client" if c["retention_days"] is None else f"for {plural(c['retention_days'], 'day')}"
             cards.append(
                 f"""<section class="card">
                   <h3>{escape(name)}</h3>
-                  <p class="meta">{c["files"]} files · {c["bytes"] / 1024:.0f} KB · {c["runs"]} runs · kept {kept}</p>
+                  <p class="meta">{plural(c["files"], "file")} · {c["bytes"] / 1024:.0f} KB · {plural(c["runs"], "run")} · kept {kept}</p>
                   <form method="post" action="/clients/{escape(name)}/files" enctype="multipart/form-data">
-                    <input type="file" name="file"/> <button>Upload</button>
+                    <label>Add a file <input type="file" name="file"/></label> <button>Upload file</button>
                   </form>
                   <form method="post" action="/clients/{escape(name)}/restricted">
                     <input type="hidden" name="restricted" value="{"false" if c["restricted"] else "true"}"/>
-                    <span>{"<strong>Restricted</strong>: its runs reach only " + approved if c["restricted"]
-                           else "Not restricted: its runs may reach any provider in the route table"}</span>
+                    <span>{restricted_line if c["restricted"]
+                           else "Not restricted: its runs may go to any provider in the route table."}</span>
                     <button>{"Lift the restriction" if c["restricted"] else "Mark as restricted"}</button>
                   </form>
                   <form method="post" action="/clients/{escape(name)}/retention">
-                    <label>Keep for <input type="number" name="days" min="1" size="5"
+                    <label>Keep material for <input type="number" name="days" min="1" size="5"
                       value="{c["retention_days"] or ""}"/> days</label>
-                    <button>Set</button> <span class="meta">empty keeps everything</span>
+                    <button>Save retention period</button> <span class="meta">Leave empty to keep all of it.</span>
                   </form>
                   <details><summary>Delete this client</summary>
-                    <p>Removes the folder and the content of every run made for {escape(name)}: briefs, drafts,
-                     scores, replies and model inputs and outputs. Run costs and the audit log stay. This cannot be undone.</p>
+                    <p>Deleting removes the folder and the content of each run for {escape(name)}: briefs, drafts,
+                     scores, replies, model inputs and outputs. Run costs and the audit log stay. You cannot undo this.</p>
                     <form method="post" action="/clients/{escape(name)}/delete">
-                      <input type="text" name="confirm" placeholder="type {escape(name)} to confirm"/>
+                      <label>Type {escape(name)} to confirm <input type="text" name="confirm" autocomplete="off"/></label>
                       <button class="reject">Delete {escape(name)}</button>
                     </form>
                   </details>
                 </section>"""
             )
-        return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>Clients — Personal Agent</title><style>{PAGE_STYLE}
- form {{ margin: .4rem 0; }} .reject {{ background: #7a2c22; color: #fff; }}
- button {{ padding: .3rem .7rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
-</style></head>
-<body>
-{NAV}
+        return render("Clients", "clients", f"""
 <h1>Clients</h1>
-<p>Each client has its own folder; a run sees only its own client's files. A retention period removes files and
- run content older than it, once a day.</p>
+<p class="lede">Each client has its own folder, and a run reads its own client's files and no others.
+ Set a retention period and the daily job removes files and run content older than it.</p>
 <form method="post" action="/retention/apply"><button>Apply retention periods now</button></form>
-{"".join(cards) or "<p>No clients yet.</p>"}
-</body></html>"""
+{"".join(cards) or "<p>No client has a folder yet. Create one with <code>POST /clients</code>.</p>"}
+""")
 
     # --- runs screen ------------------------------------------------------------------
     @app.get("/runs/{run_id}/trace")
@@ -457,7 +508,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         rows = "".join(
             f'<tr><td><a href="/inspect/{r["id"]}">{escape(r["created_at"][:16].replace("T", " "))}</a></td>'
             f'<td>{escape(r["workflow"])}</td><td>{escape(r["client"])}</td>'
-            f'<td class="s-{escape(r["status"])}">{escape(r["status"].replace("_", " "))}</td>'
+            f'<td><span class="s-{escape(r["status"])}">{escape(r["status"].replace("_", " "))}</span></td>'
             f'<td>${(r["cost_usd"] or 0):.2f}</td></tr>'
             for r in runs
         )
@@ -467,17 +518,16 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                              ("waiting_for_input", "waiting for input"), ("failed", "failed"), ("done", "done")]
         )
         table = (
-            f"<table><tr><th>Started (UTC)</th><th>Workflow</th><th>Client</th><th>Status</th><th>Cost</th></tr>{rows}</table>"
-            if runs else "<p>No runs.</p>"
+            '<div class="tablewrap"><table><tr><th>Started (UTC)</th><th>Workflow</th><th>Client</th><th>Status</th>'
+            f"<th>Cost</th></tr>{rows}</table></div>"
+            if runs else "<p>No run matches this filter.</p>"
         )
-        return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>Runs — Personal Agent</title><style>{PAGE_STYLE}</style></head>
-<body>
-{NAV}
+        return render("Runs", "runs", f"""
 <h1>Runs</h1>
-<p class="meta">Show: {filters}. The most recent 200.</p>
+<p class="lede">Open a run to see each step, its model calls and its cost.</p>
+<p>Show: {filters}. The list holds the most recent 200.</p>
 {table}
-</body></html>"""
+""")
 
     @app.get("/inspect/{run_id}", response_class=HTMLResponse)
     def run_page(run_id: str) -> str:
@@ -520,7 +570,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                    <span class="s-{escape(step["status"])}">{escape(step["status"])}</span></h3>
                   <p class="meta">${step["cost_usd"]:.4f} · {step["tokens"]:,} tokens{duration}{kind}</p>
                   {f'<p class="error">{escape(step["error"])}</p>' if step["error"] else ""}
-                  {calls}{tools}{block("What the step wrote to the run", step["output"])}
+                  {calls}{tools}{block("Step output", step["output"])}
                 </section>"""
             )
         by_node = "".join(
@@ -530,42 +580,39 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         )
         untraced = (
             f'<p class="meta">${trace["untraced_cost_usd"]:.4f} of this run\'s cost has no per-node record '
-            "(it ran before tracing was added, or a call's cost could not be read).</p>"
+            "(the run predates tracing, or a call reported no cost).</p>"
             if trace["untraced_cost_usd"] > 0.00005 else ""
         )
         prompts = ", ".join(f"{escape(node)} {escape(v)}" for node, v in trace["prompt_versions"]) or "none"
         flags = "".join(f"<li>{escape(str(f))}</li>" for f in run["flags"] or [])
-        return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>Run {escape(run["id"][:8])} — Personal Agent</title>
-<style>{PAGE_STYLE}</style></head>
-<body>
-{NAV}
+        return render(f"Run {run['id'][:8]}", "runs", f"""
 <h1>{escape(run["workflow"])} <span class="s-{escape(run["status"])}">{escape(run["status"].replace("_", " "))}</span></h1>
-<p class="meta">run {escape(run["id"])} · client {escape(run["client"])} · started {escape(run["created_at"])} ·
+<p class="meta">run <code>{escape(run["id"])}</code> · client {escape(run["client"])} · started {escape(run["created_at"])} ·
  updated {escape(run["updated_at"])}</p>
 {f'<p class="error">{escape(run["error_reason"])}</p>' if run["error_reason"] else ""}
 <p class="total">${(run["cost_usd"] or 0):.4f} <span class="meta">{(run["tokens_in"] or 0):,} tokens in,
- {(run["tokens_out"] or 0):,} out{" · a fallback model was used" if run["fallback_used"] else ""}</span></p>
-<p class="meta">skill library {escape((run["skill_library_version"] or "")[:12])} · prompts: {prompts}</p>
-{f'<ul class="meta">{flags}</ul>' if flags else ""}
+ {(run["tokens_out"] or 0):,} out{" · a fallback model answered" if run["fallback_used"] else ""}</span></p>
+<p class="meta">skill library <code>{escape((run["skill_library_version"] or "")[:12])}</code> · prompts: {prompts}</p>
+{f'<ul class="notes">{flags}</ul>' if flags else ""}
 {block("Run inputs", tracing.clip(run["inputs"]))}{block("Run outputs", tracing.clip(run["outputs"]))}
 <h2>Cost by node</h2>
-{f'<table><tr><th>Node</th><th>Steps</th><th>Model calls</th><th>Tokens</th><th>Cost</th></tr>{by_node}</table>' if by_node else '<p>No steps were recorded for this run.</p>'}
+{f'<div class="tablewrap"><table><tr><th>Node</th><th>Steps</th><th>Model calls</th><th>Tokens</th><th>Cost</th></tr>{by_node}</table></div>' if by_node else '<p>This run has no recorded steps.</p>'}
 {untraced}
 <h2>Steps</h2>
-{"".join(cards) or "<p>No steps were recorded for this run.</p>"}
-{block("Tool calls not tied to a step", trace["unplaced_tool_calls"])}
-</body></html>"""
+{"".join(cards) or "<p>This run has no recorded steps.</p>"}
+{block("Tool calls outside a step", trace["unplaced_tool_calls"])}
+""")
 
     # --- cost and settings ------------------------------------------------------------
     def _cap_banner() -> str:
         cap = costs.current_cap(db, settings)
         if cap["state"] == "alert":
-            return (f'<div class="banner">Spend this month is at {cap["used"]:.0%} of the '
+            return (f'<div class="banner" role="status">Spend this month is at {cap["used"]:.0%} of the '
                     f'${cap["cap_usd"]:.2f} cap.</div>')
         if cap["state"] == "stopped":
-            return (f'<div class="banner stop">The ${cap["cap_usd"]:.2f} monthly cap is reached. Runs started '
-                    "by the mail watcher or a schedule are refused; runs you start still go ahead.</div>")
+            return (f'<div class="banner stop" role="status">Spend has reached the ${cap["cap_usd"]:.2f} monthly cap. '
+                    "The agent refuses runs from the mail watcher and from schedules. "
+                    "Runs you start still go ahead.</div>")
         return ""
 
     @app.get("/costs")
@@ -591,12 +638,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 f"<td>{r['tokens']:,}</td><td>${r['cost_usd']:.2f}</td></tr>"
                 for r in rows
             )
-            return (f"<h2>{title}</h2><table><tr><th></th><th>Runs</th><th>Failed</th><th>Tokens</th>"
-                    f"<th>Cost</th></tr>{body}</table>")
+            return (f'<h2>{title}</h2><div class="tablewrap"><table><tr><th>Name</th><th>Runs</th><th>Failed</th>'
+                    f"<th>Tokens</th><th>Cost</th></tr>{body}</table></div>")
 
         cap = s["cap"]
         if cap["state"] == "none":
-            cap_line = "No monthly cap is set (<code>monthly_cap_usd</code> in <code>config/budgets.yaml</code>)."
+            cap_line = "You have set no monthly cap (<code>monthly_cap_usd</code> in <code>config/budgets.yaml</code>)."
         else:
             width = min(100, round(cap["used"] * 100))
             cap_line = (
@@ -616,25 +663,21 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         )
         policy = settings.sponsorship
         sponsorship = (
-            "not configured: every enquiry escalates" if policy is None else
+            "no policy file: each enquiry escalates" if policy is None else
             f"pursue at {policy.pursue_at}, decline below {policy.decline_below}, escalate above "
             + ("any amount" if policy.escalate_above is None else f"{policy.escalate_above:,.0f} naira")
         )
-        return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>Settings and cost — Personal Agent</title>
-<style>{PAGE_STYLE}</style></head>
-<body>
-{NAV}
+        return render("Settings and cost", "cost", f"""
 <h1>Settings and cost</h1>
 {_cap_banner() if s["month"] == costs.month_bounds()[0] else ""}
 <p class="month"><a href="/cost?month={before}">&larr; {before}</a> <strong>{s["month"]}</strong>
  <a href="/cost?month={after}">{after} &rarr;</a></p>
-<p class="total">${s["total_usd"]:.2f} <span class="meta">across {s["runs"]} runs</span></p>
+<p class="total">${s["total_usd"]:.2f} <span class="meta">across {plural(s["runs"], "run")}</span></p>
 <p>{cap_line}</p>
 {table("By workflow", s["by_workflow"])}
 {table("By client", s["by_client"])}
 <h2>Model routes</h2>
-<table><tr><th>Tier</th><th>Primary</th><th>Fallback</th></tr>{routes}</table>
+<div class="tablewrap"><table><tr><th>Tier</th><th>Primary</th><th>Fallback</th></tr>{routes}</table></div>
 <h2>Ceilings for each run</h2>
 <table>
 <tr><td>Cost</td><td>${b.max_cost_usd:.2f}</td></tr>
@@ -643,8 +686,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <tr><td>Elapsed time</td><td>{b.max_elapsed_seconds} seconds</td></tr>
 </table>
 <h2>Connected tools</h2>
-<table><tr><th>Tool</th><th>Class</th><th>Approval</th></tr>{tools}</table>
-<p class="meta">Mail is not connected: <code>send_mail</code> holds approved replies in the local outbox.</p>
+<div class="tablewrap"><table><tr><th>Tool</th><th>Class</th><th>Approval</th></tr>{tools}</table></div>
+<p class="meta">No mail connection yet: <code>send_mail</code> holds approved replies in the local outbox.</p>
 <h2>Other settings</h2>
 <table>
 <tr><td>Sponsorship policy</td><td>{sponsorship}</td></tr>
@@ -652,12 +695,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <tr><td>Creative review</td><td>images up to {settings.creative_review.image_max_edge} px,
  {settings.creative_review.pages_per_group} pages a call, {settings.creative_review.max_pages} pages at most</td></tr>
 <tr><td>Approved for confidential work</td><td>{escape(", ".join(settings.confidential_providers)) or "no provider yet"}
- <span class="meta">(<code>config/providers.yaml</code>; restricted clients are marked on the <a href="/files">Clients</a> page)</span></td></tr>
-<tr><td>Retention per client</td><td>set for each client on the <a href="/files">Clients</a> page</td></tr>
+ <span class="meta">(<code>config/providers.yaml</code>; mark restricted clients on the <a href="/files">Clients</a> screen)</span></td></tr>
+<tr><td>Retention per client</td><td>Set it per client on the <a href="/files">Clients</a> screen.</td></tr>
 </table>
-<p class="meta">These are read from the files in <code>config/</code> and the server environment.
- Change them there; this screen does not edit them.</p>
-</body></html>"""
+<p class="meta">The agent reads these from <code>config/</code> and the server environment.
+ Change them there. This screen shows them and edits none.</p>
+""")
 
     # --- skill library and the learning loop ---------------------------------------
     def _proposal_view(proposal: dict) -> dict:
@@ -714,17 +757,17 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                   <div class="actions">
                     <form method="post" action="/learning/proposals/{p["id"]}">
                       <input type="hidden" name="decision" value="accepted"/>
-                      <button class="approve">Accept — change the skill file</button>
+                      <button class="approve">Accept and change the skill file</button>
                     </form>
                     <form method="post" action="/learning/proposals/{p["id"]}">
                       <input type="hidden" name="decision" value="declined"/>
-                      <input type="text" name="note" placeholder="why not (optional)"/>
+                      <input type="text" name="note" placeholder="reason (optional)" aria-label="Reason for declining"/>
                       <button class="reject">Decline</button>
                     </form>
                   </div>
                 </section>"""
             )
-        pending = "".join(cards) or "<p>No proposed changes are waiting.</p>"
+        pending = "".join(cards) or "<p>No proposal waits for your decision.</p>"
         latest = next((r for r in db.list_runs() if r["workflow"] == learning.WORKFLOW and r["outputs"]), None)
         report = ""
         if latest:
@@ -738,41 +781,24 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             period = latest["outputs"]["period"]
             report = f"""<h2>Weekly report</h2>
               <p class="meta">{escape(period["since"])} to {escape(period["until"])}</p>
-              <table><tr><th>Workflow</th><th>Runs</th><th>Failed</th><th>Edit rate</th>
-              <th>Rejection rate</th><th>Cost</th></tr>{rows}</table>"""
+              <div class="tablewrap"><table><tr><th>Workflow</th><th>Runs</th><th>Failed</th><th>Edit rate</th>
+              <th>Rejection rate</th><th>Cost</th></tr>{rows}</table></div>"""
         files = "".join(
             f"<details><summary>{escape(name)}</summary><pre>{escape(text)}</pre></details>"
             for name, text in sorted(library.items())
         )
-        return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>Skill library — Personal Agent</title>
-<style>
- body {{ font-family: Georgia, serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #faf9f6; }}
- h1 {{ border-bottom: 2px solid #1a1a1a; }}
- .card {{ background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }}
- pre {{ white-space: pre-wrap; background: #f4f3ef; padding: .75rem; border-radius: 6px; overflow-x: auto; }}
- .meta {{ color: #666; font-size: .85rem; }}
- .actions {{ display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }}
- form {{ display: flex; gap: .4rem; align-items: center; }}
- button {{ padding: .4rem .8rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
- .approve {{ background: #1a5c3f; color: #fff; }}
- .reject {{ background: #7a2c22; color: #fff; }}
- table {{ border-collapse: collapse; width: 100%; font-size: .9rem; }}
- th, td {{ text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }}
- details {{ margin: .5rem 0; }}
-</style></head>
-<body>
-{NAV}
+        return render("Skill library", "library", f"""
 <h1>Skill library</h1>
-<p>The agent never edits these files. A change arrives here as a proposal from the learning review and takes effect only when you accept it.</p>
-<p class="meta">library version {version[:12]}</p>
+<p class="lede">The agent cannot edit these files. The learning review proposes a change here, and it takes
+ effect once you accept it.</p>
+<p class="meta">library version <code>{version[:12]}</code></p>
 <form method="post" action="/learning/reviews"><button>Run a learning review now</button></form>
 <h2>Proposed changes</h2>
 {pending}
 {report}
 <h2>Skills</h2>
 {files}
-</body></html>"""
+""")
 
     @app.get("/queue", response_class=HTMLResponse)
     def queue_page() -> str:
@@ -787,16 +813,16 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             notes = f'<ul class="notes say">{notes}</ul>' if notes else ""
             to = f'<p class="meta say">To: {escape(content["to"])}</p>' if content.get("to") else ""
             approve = {
-                "send": "Approve — send exactly this reply",
-                "acknowledge": "Acknowledge — nothing is sent",
-                "outline": "Approve this outline — start drafting",
-                "save": "Approve — save exactly this document",
-            }.get(item.get("action"), "Approve — release exactly this content")
+                "send": "Approve and send this reply",
+                "acknowledge": "Acknowledge, send nothing",
+                "outline": "Approve outline and start the draft",
+                "save": "Approve and save this document",
+            }.get(item.get("action"), "Approve and release this content")
             edit = (
                 f"""<details><summary>Edit, then approve</summary>
                     <form method="post" action="/runs/{item["run_id"]}/approval" class="edit">
                       <input type="hidden" name="decision" value="approved"/>
-                      <textarea name="edited_body" rows="16">{escape(content.get("body", ""))}</textarea>
+                      <textarea name="edited_body" rows="16" aria-label="Your edited version">{escape(content.get("body", ""))}</textarea>
                       <button class="approve">Approve my edited version</button>
                     </form></details>"""
                 if item.get("editable") else ""
@@ -811,7 +837,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                   {notes}
                   {to}
                   <pre class="say">{escape(content.get("body", ""))}</pre>
-                  <p class="meta">content hash: <code>{item["content_hash"]}</code></p>
+                  <p class="meta">Your approval covers this content: <code>{item["content_hash"][:16]}</code></p>
                   {edit}
                   <div class="actions">
                     <form method="post" action="/runs/{item["run_id"]}/approval">
@@ -820,12 +846,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                     </form>
                     <form method="post" action="/runs/{item["run_id"]}/approval">
                       <input type="hidden" name="decision" value="sent_back"/>
-                      <input type="text" name="comment" placeholder="what to change"/>
+                      <input type="text" name="comment" placeholder="change to make" aria-label="Change to make"/>
                       <button class="sendback">Send back with a comment</button>
                     </form>
                     <form method="post" action="/runs/{item["run_id"]}/approval">
                       <input type="hidden" name="decision" value="rejected"/>
-                      <input type="text" name="comment" placeholder="reason (required in the real flow)"/>
+                      <input type="text" name="comment" placeholder="reason for rejecting" aria-label="Reason for rejecting"/>
                       <button class="reject">Reject</button>
                     </form>
                   </div>
@@ -842,43 +868,28 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                   <p class="say">{escape(ask["goal"])}</p>
                   <ol class="say">{questions}</ol>
                   <form method="post" action="/runs/{ask["run_id"]}/input" class="edit">
-                    <textarea name="answers" rows="6" placeholder="Your answers"></textarea>
-                    <button class="approve">Send answers — continue to the outline</button>
+                    <textarea name="answers" rows="6" placeholder="Your answers" aria-label="Your answers"></textarea>
+                    <button class="approve">Send answers and draft the outline</button>
                   </form>
                 </section>"""
             )
-        listing = "".join(rows) or "<p>Nothing is waiting for your approval.</p>"
-        return f"""<!doctype html>
-<html><head><meta charset="utf-8"/><title>Approval queue — Personal Agent</title>
-<style>
- body {{ font-family: Georgia, serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #faf9f6; }}
- h1 {{ border-bottom: 2px solid #1a1a1a; }}
- .card {{ background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }}
- pre {{ white-space: pre-wrap; background: #f4f3ef; padding: .75rem; border-radius: 6px; }}
- .meta {{ color: #666; font-size: .85rem; }}
- .notes {{ font-size: .9rem; margin: .5rem 0; padding-left: 1.1rem; }}
- .error {{ color: #b3261e; font-weight: bold; margin: .5rem 0; }}
- .actions {{ display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }}
- form {{ display: flex; gap: .4rem; align-items: center; }}
- form.edit {{ flex-direction: column; align-items: stretch; margin: .5rem 0; }}
- textarea {{ width: 100%; box-sizing: border-box; font: inherit; padding: .5rem; }}
- details {{ margin: .5rem 0; }}
- button {{ padding: .4rem .8rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
- .approve {{ background: #1a5c3f; color: #fff; }}
- .reject {{ background: #7a2c22; color: #fff; }}
- .read {{ font-size: .8rem; padding: .25rem .6rem; margin: .2rem 0 .4rem; }}
- nav a {{ margin-right: 1rem; font-size: .9rem; }}
- .banner {{ background: #fbf1d9; border: 1px solid #b7791f; border-radius: 6px; padding: .6rem .8rem; margin: 1rem 0; }}
- .banner.stop {{ background: #f8e3df; border-color: #7a2c22; }}
-</style></head>
-<body>
-{NAV}
+        approvals, questions = len(engine.queue()), len(engine.input_requests())
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
+        failed = sum(r["created_at"] >= week_ago for r in db.list_runs(status="failed"))
+        listing = "".join(rows) or (
+            "<p>No item needs your decision. New work appears here once a run reaches its approval step.</p>"
+        )
+        return render("Approval queue", "queue", f"""
 <h1>Approval queue</h1>
+<p class="lede">Each item below waits for your decision. You see the full content before you release it.</p>
 {_cap_banner()}
-<p>Nothing leaves the system without your approval. The exact content is shown before any release.</p>
+<div class="strip">
+  <a href="/queue"><strong>{approvals}</strong>{"approval" if approvals == 1 else "approvals"} waiting</a>
+  <a href="/queue"><strong>{questions}</strong>{"run" if questions == 1 else "runs"} with questions for you</a>
+  <a href="/inspect?status=failed"><strong>{failed}</strong>failed {"run" if failed == 1 else "runs"} in the last 7 days</a>
+</div>
 {listing}
-{READ_ALOUD_SCRIPT}
-</body></html>"""
+""", script=READ_ALOUD_SCRIPT)
 
     return app
 

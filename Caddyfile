@@ -4,7 +4,30 @@
 }
 
 {$AGENT_DOMAIN} {
-	# Foundation: the queue page is the only UI. Single-owner login gains
-	# two-factor before any client material loads (see deploy/hardening.md).
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		# A private workspace: keep it out of search engines.
+		X-Robots-Tag "noindex, nofollow"
+		# The pages carry their own styles and one inline script, and load nothing from other hosts.
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
+		-Server
+	}
+
+	# File intake accepts up to 20 MB; refuse anything much larger at the door.
+	request_body {
+		max_size 25MB
+	}
+
+	# The app holds the owner's sign-in (password and one-time code); see src/personal_agent/auth.py.
 	reverse_proxy api:8000
+}
+
+# The www name sends visitors to the bare domain. It needs its own DNS record.
+www.{$AGENT_DOMAIN} {
+	redir https://{$AGENT_DOMAIN}{uri} permanent
 }

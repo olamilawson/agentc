@@ -25,6 +25,13 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       PERSONAL_AGENT_N8N_SECRET: ${PERSONAL_AGENT_N8N_SECRET:-}
+      PERSONAL_AGENT_NAME: ${PERSONAL_AGENT_NAME:-Personal Agent}
+      # Owner sign-in. On this server the app refuses every request until all
+      # three are set (create them with: python -m personal_agent.auth).
+      PERSONAL_AGENT_REQUIRE_LOGIN: "1"
+      PERSONAL_AGENT_OWNER_PASSWORD_HASH: ${PERSONAL_AGENT_OWNER_PASSWORD_HASH:-}
+      PERSONAL_AGENT_TOTP_SECRET: ${PERSONAL_AGENT_TOTP_SECRET:-}
+      PERSONAL_AGENT_SESSION_SECRET: ${PERSONAL_AGENT_SESSION_SECRET:-}
     volumes:
       # Client folders (the image points them at /app/data). A host directory,
       # so deploy/backup.sh picks it up. Checkpoints are in Postgres.
@@ -43,6 +50,7 @@ services:
       - "443:443"
     environment:
       AGENT_DOMAIN: ${AGENT_DOMAIN:?set in .env on the server}
+      AGENT_ADMIN_EMAIL: ${AGENT_ADMIN_EMAIL:?set in .env on the server}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

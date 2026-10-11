@@ -161,7 +161,7 @@ def test_api_and_page_set_retention_and_require_the_name_to_delete(settings):
     assert client.post("/clients/acme/retention", json={"days": 0}).status_code == 400
     assert client.post("/clients/nobody/retention", json={"days": 5}).status_code == 404
     page = client.get("/files").text
-    assert "Delete this client" in page and "1 files" in page and 'href="/files"' in page
+    assert "Delete this client" in page and "1 file ·" in page and 'href="/files"' in page
 
     assert client.post("/clients/acme/delete", data={"confirm": "Acme"}).status_code == 400
     assert client.post("/clients/acme/delete").status_code == 400

@@ -132,7 +132,7 @@ def test_api_sets_and_lifts_the_flag_and_the_change_is_audited(settings):
     assert marked == {"client": "acme", "restricted": True, "approved_providers": ["anthropic"]}
     assert client.get("/clients/acme").json()["restricted"] is True
     page = client.get("/files").text
-    assert "<strong>Restricted</strong>: its runs reach only anthropic" in page and "Lift the restriction" in page
+    assert "Its runs go to anthropic and no other provider." in page and "Lift the restriction" in page
     assert "Approved for confidential work" in client.get("/cost").text
 
     assert client.post("/clients/acme/restricted", json={"restricted": False}).json()["restricted"] is False
@@ -150,7 +150,7 @@ def test_page_says_so_when_no_provider_is_approved_and_deleting_a_client_clears_
     client = TestClient(create_app(settings, gateway=RecordedGateway({})))
     client.post("/clients", json={"name": "acme"})
     client.post("/clients/acme/restricted", json={"restricted": True})
-    assert "none is approved for confidential work" in client.get("/files").text
+    assert "You have approved no provider for confidential work" in client.get("/files").text
 
     client.post("/clients/acme/delete", data={"confirm": "acme"})
     client.post("/clients", json={"name": "acme"})  # a new client of the same name starts unrestricted

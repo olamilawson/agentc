@@ -61,6 +61,15 @@ class Settings(BaseModel):
     creative_review: CreativeReviewSettings = CreativeReviewSettings()
     # Providers approved for confidential work; a restricted client's runs use only these.
     confidential_providers: list[str] = []
+    # The name shown in the rail and the page titles.
+    brand_name: str = "Personal Agent"
+    # Owner login (see auth.py). All three set: every page needs a session.
+    owner_password_hash: str | None = None
+    totp_secret: str | None = None
+    session_secret: str | None = None
+    session_hours: int = 12
+    # On a server: with the login not set up, refuse every request instead of serving open.
+    require_login: bool = False
 
 
 def load_settings() -> Settings:
@@ -88,7 +97,14 @@ def load_settings() -> Settings:
     creative = CreativeReviewSettings(**(yaml.safe_load(creative_path.read_text()) if creative_path.exists() else {}))
     providers_path = Path(os.environ.get("PERSONAL_AGENT_PROVIDERS", REPO_ROOT / "config" / "providers.yaml"))
     providers = (yaml.safe_load(providers_path.read_text()) or {}) if providers_path.exists() else {}
+    env = os.environ.get
     return Settings(
+        brand_name=env("PERSONAL_AGENT_NAME") or "Personal Agent",
+        owner_password_hash=env("PERSONAL_AGENT_OWNER_PASSWORD_HASH") or None,
+        totp_secret=env("PERSONAL_AGENT_TOTP_SECRET") or None,
+        session_secret=env("PERSONAL_AGENT_SESSION_SECRET") or None,
+        session_hours=int(env("PERSONAL_AGENT_SESSION_HOURS") or 12),
+        require_login=(env("PERSONAL_AGENT_REQUIRE_LOGIN") or "").lower() in ("1", "true", "yes"),
         confidential_providers=[str(p).lower() for p in providers.get("approved_for_confidential") or []],
         creative_review=creative,
         sponsorship=policy,

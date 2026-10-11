@@ -63,7 +63,7 @@ def test_cost_page_shows_the_month_the_cap_and_the_settings(settings):
     _run(client)
     page = client.get("/cost").text
     assert "$0.00" in page and "By workflow" in page and "foundation-test" in page
-    assert "No monthly cap is set" in page
+    assert "You have set no monthly cap" in page
     assert "openai/gpt-5" in page  # the route table
     assert "send_mail" in page and "owner approval for every call" in page
     assert "s3cret" not in page  # the webhook secret is never shown
@@ -89,8 +89,8 @@ def test_cap_alerts_once_at_eighty_percent_then_stops_runs_not_started_by_hand(s
 
     # A run the owner starts by hand still goes ahead.
     assert _run(client).status_code == 201
-    assert "monthly cap is reached" in client.get("/queue").text
-    assert "monthly cap is reached" in client.get("/cost").text
+    assert "Spend has reached the $0.01 monthly cap" in client.get("/queue").text
+    assert "Spend has reached the $0.01 monthly cap" in client.get("/cost").text
 
 
 def test_scheduled_learning_review_stops_at_the_cap_but_the_owners_does_not(settings):
