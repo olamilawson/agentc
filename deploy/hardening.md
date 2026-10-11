@@ -41,10 +41,11 @@ sit behind login and an address allowlist (host firewall or reverse proxy rule)
 
 ## 5. Backups — daily, encrypted, off the server, test-restored monthly
 
-`backup.sh` (run from cron as root) dumps Postgres, the client folders and the
-Caddy data, encrypts with the owner's age public key, and ships it off the
-server. A restore is rehearsed monthly into a scratch directory and the result
-is checked before it counts.
+`backup.sh` (run from cron as root) dumps Postgres and copies the client
+folders, encrypts with the owner's age public key, and ships it off the server.
+It does not copy the Caddy data: that holds only TLS certificates and their
+keys, which Caddy obtains again on a restored server. A restore is rehearsed
+monthly into a scratch directory and the result is checked before it counts.
 
 ## 6. Secrets
 

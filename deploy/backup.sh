@@ -6,16 +6,16 @@ set -euo pipefail
 STAMP=$(date +%F)
 WORK=$(mktemp -d)
 DEST="${BACKUP_DEST:?set BACKUP_DEST, e.g. rsync target or bucket}"
-AGE_PUBKEY="${AGE_PUBKEY:?owner's age public key}"
+AGE_PUBKEY="${AGE_PUBKEY:?set AGE_PUBKEY to the age public key of the owner}"
 COMPOSE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 
 trap 'rm -rf "$WORK"' EXIT
 
-# 1. Postgres dump
+# 1. Postgres dump: app tables and LangGraph checkpoints
 docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T postgres \
   pg_dump -U personal_agent personal_agent > "$WORK/db.sql"
 
-# 2. App data: client folders, run attachments, checkpoints
+# 2. Client folders. (Caddy's volumes are not backed up: certificates are re-issued.)
 cp -r "$COMPOSE_DIR/data" "$WORK/data" 2>/dev/null || true
 
 # 3. Encrypt with the owner's key — only the owner can read it
