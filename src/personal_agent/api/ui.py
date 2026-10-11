@@ -10,9 +10,10 @@ measured rather than judged by eye:
   attention    #D97706 -> #92400E   on its amber tint 3.07:1; now 6.84:1
   field edges  #CBD5E1 -> #64748B   1.48:1 against white fails 3:1; 4.76:1 passes
 
-No web font is fetched: a private page should not call a font host on each
-visit. The stacks name the design's faces first and fall back to Georgia and
-the system sans, as the design's own token sheet allows.
+The design's two faces, Playfair Display and Inter, ship with the app in
+static/fonts (SIL Open Font License; the licence files sit beside them). The
+pages load them from this server and call no font host. The latin-ext files
+carry the marked letters of Yoruba and Igbo names and the naira sign.
 """
 
 from __future__ import annotations
@@ -20,6 +21,18 @@ from __future__ import annotations
 from html import escape
 
 CSS = """
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("/static/fonts/inter-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("/static/fonts/inter-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: "Playfair Display"; font-style: normal; font-weight: 400 900; font-display: swap;
+  src: url("/static/fonts/playfair-display-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Playfair Display"; font-style: normal; font-weight: 400 900; font-display: swap;
+  src: url("/static/fonts/playfair-display-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 :root {
   --rail: #0B0E14; --rail-text: #94A3B8; --rail-active: #1E293B; --inverse: #F8FAFC;
   --canvas: #F8FAFC; --card: #FFFFFF; --subtle: #F1F5F9; --line: #E2E8F0; --edge: #64748B;

@@ -12,10 +12,12 @@ import hmac
 import json
 from datetime import datetime, timedelta, timezone
 from html import escape
+from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from personal_agent.api import ui
@@ -152,7 +154,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     @app.middleware("http")
     async def require_session(request: Request, call_next):
         path = request.url.path
-        if path in ("/health", "/login") or path.startswith("/hooks/"):
+        # The fonts are public files, and the sign-in page needs them before any session exists.
+        if path in ("/health", "/login") or path.startswith(("/hooks/", "/static/fonts/")):
             return await call_next(request)
         if guard is None:
             if settings.require_login:
@@ -215,6 +218,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             title, active, body, brand=settings.brand_name, waiting=waiting,
             signed_in=guard is not None, script=script,
         )
+
+    app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
     @app.get("/")
     def home():

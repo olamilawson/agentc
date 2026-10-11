@@ -45,6 +45,10 @@ def test_every_screen_and_endpoint_needs_a_session(client):
     assert client.get("/health").json() == {"ok": True}
     assert "Sign in" in client.get("/login").text
     assert client.post("/hooks/n8n/sponsorship", json={}).status_code in (401, 422)
+    # The sign-in page needs its fonts; nothing else under /static is open.
+    font = client.get("/static/fonts/inter-latin-wght-normal.woff2")
+    assert font.status_code == 200 and font.content[:4] == b"wOF2"
+    assert client.get("/static/anything-else.txt").status_code == 401
 
 
 def test_right_password_and_code_open_a_session(client):
@@ -110,6 +114,22 @@ def test_a_server_without_a_login_refuses_instead_of_serving_open(settings):
     assert client.get("/queue").status_code == 503
     assert "Sign-in is not set up" in client.get("/runs").text
     assert client.get("/health").status_code == 200
+
+
+def test_pages_use_the_bundled_fonts_and_call_no_other_host(client):
+    from pathlib import Path
+
+    import personal_agent.api.ui as ui
+
+    fonts = Path(ui.__file__).parent / "static" / "fonts"
+    for family in ("inter", "playfair-display"):
+        for subset in ("latin", "latin-ext"):
+            name = f"{family}-{subset}-wght-normal.woff2"
+            assert (fonts / name).read_bytes()[:4] == b"wOF2"
+            assert f"/static/fonts/{name}" in ui.CSS
+    assert (fonts / "Inter-LICENSE.txt").exists() and (fonts / "PlayfairDisplay-LICENSE.txt").exists()
+    page = client.get("/login").text
+    assert "http://" not in page and "https://" not in page  # no font host, no outside request at all
 
 
 def test_password_hash_and_codes():

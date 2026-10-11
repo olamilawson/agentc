@@ -43,7 +43,9 @@ this repository implements **Delivery phase 1: Foundation**.
   (`src/personal_agent/api/ui.py`), following the owner's Stitch design for
   Chidimma OS: a dark rail, a slate canvas, white cards, a serif for display.
   Four of that design's colours were darkened to meet contrast minimums; the
-  file lists each with its measured ratio. No web font is fetched.
+  file lists each with its measured ratio. The design's two typefaces (Playfair
+  Display and Inter, SIL Open Font License) ship in `api/static/fonts` and load
+  from this server; the pages call no outside host.
 - **Going live** — `deploy/go-live.md` is the checklist for ijeoma.pro on the
   Hostinger VPS.
 - **Restricted clients** — a client marked restricted on `/files` has its runs

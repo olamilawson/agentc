@@ -90,6 +90,10 @@ on your phone, and store a copy of the key somewhere safe.
 with a model your provider keys can call, commit, and push. A run fails at its
 first model step if a name is wrong or a key is missing.
 
+With one provider's key and no other, point each tier's primary at that
+provider. A tier whose primary belongs to a provider with no key fails that
+call first, then answers from its fallback, on each model step.
+
 ## 8. Deploy
 
 ```bash
