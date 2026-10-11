@@ -49,7 +49,9 @@ this repository implements **Delivery phase 1: Foundation**.
   and Microsoft sends the invitation. An answer that picks neither is
   escalated. A later mail from that sender asking to cancel the call, or to
   move it, leads to a cancellation or a move of the same event for the owner
-  to approve. `GET /calls` lists the calls the agent has scheduled.
+  to approve. The Calls screen (`/calendar`) lists the calls the agent has
+  scheduled, and the owner can start a move or a cancellation there; it goes
+  to the approval queue before anything changes.
 - **Sign-in** — one owner, a password and a one-time code from an
   authenticator app (`src/personal_agent/auth.py`). With the three login
   secrets set, every route needs a session except `/health`, `/login` and the

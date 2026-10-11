@@ -22,6 +22,7 @@ from personal_agent.clients import ClientScope, ClientStore, parse_document
 from personal_agent.config import Settings
 from personal_agent.db import Database, new_id
 from personal_agent.engine.brief_evaluation import brief_contracts, brief_outputs, build_brief_graph
+from personal_agent.engine.call_change import build_call_change_graph, call_change_contracts, call_change_outputs
 from personal_agent.engine.creative_review import build_creative_graph, creative_contracts, creative_outputs
 from personal_agent.engine.graph import ROLE, DraftIn, DraftOut, build_test_graph
 from personal_agent.engine.sponsorship_triage import (
@@ -279,6 +280,7 @@ WORKFLOWS: dict[str, Workflow] = {
     "sponsorship-triage": Workflow(build_sponsorship_graph, sponsorship_outputs, sponsorship_rejected),
     "creative-review": Workflow(build_creative_graph, creative_outputs),
     "strategy-drafting": Workflow(build_drafting_graph, drafting_outputs, revises=True),
+    "call-change": Workflow(build_call_change_graph, call_change_outputs),
 }
 
 
@@ -331,7 +333,7 @@ class Engine:
             gateway=gateway or ModelGateway(settings.route_table),
             contracts={
                 **default_contracts(), **brief_contracts(), **sponsorship_contracts(), **creative_contracts(),
-                **drafting_contracts(),
+                **drafting_contracts(), **call_change_contracts(),
             },
             skill_text=skills.get("foundation-test", ""),
             skills=skills,

@@ -99,7 +99,7 @@ button:hover { background: var(--subtle); }
 .approve:hover { background: #1E293B; }
 .reject { border-color: var(--bad); color: var(--bad); }
 .read { min-height: 44px; font-size: 13px; margin: 8px 0; }
-input[type="text"], input[type="number"], input[type="password"], textarea { min-height: 44px; padding: 8px 12px;
+input[type="text"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea { min-height: 44px; padding: 8px 12px;
   border: 1px solid var(--edge); border-radius: 12px; background: var(--card); color: var(--ink); font: 14px var(--sans); }
 textarea { width: 100%; line-height: 1.5; }
 label { color: var(--ink); }
@@ -156,6 +156,7 @@ td { font-variant-numeric: tabular-nums; }
 SCREENS = [
     ("queue", "/queue", "Approval queue"),
     ("runs", "/inspect", "Runs"),
+    ("calls", "/calendar", "Calls"),
     ("clients", "/files", "Clients"),
     ("library", "/library", "Skill library"),
     ("cost", "/cost", "Settings and cost"),

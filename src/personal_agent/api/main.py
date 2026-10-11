@@ -133,10 +133,10 @@ READ_ALOUD_SCRIPT = """<script>
 </script>"""
 
 
-def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None, mail=None) -> FastAPI:
     settings = settings or load_settings()
     db = Database(settings.database_url)
-    engine = Engine(settings, db, gateway=gateway)
+    engine = Engine(settings, db, gateway=gateway, mail=mail)
 
     app = FastAPI(title="Personal Agent", version="0.1.0 (foundation)")
 
@@ -319,6 +319,78 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     def calls() -> list[dict]:
         # Calls the agent has put in the calendar, with their state.
         return db.list_calls()
+
+    async def _change_call(call_id: str, request: Request, action: str):
+        # The owner asks to move or cancel a call. Nothing changes here: the request
+        # becomes an item in the approval queue that shows the exact change.
+        from_form = not request.headers.get("content-type", "").startswith("application/json")
+        fields = await _fields(request)
+        if not db.get_call(call_id):
+            raise HTTPException(404, "call not found")
+        inputs = {"action": action, "call_id": call_id}
+        if action == "move":
+            inputs["start"] = str(fields.get("start") or "")
+        elif str(fields.get("message") or "").strip():
+            inputs["message"] = str(fields["message"]).strip()[:500]
+        run = db.get_run(engine.start_run("call-change", SPONSORSHIP_CLIENT, inputs))
+        if from_form:  # from the Calls screen: on to the queue, or back with the reason
+            if run["status"] == "failed":
+                return RedirectResponse(f"/calendar?notice={quote(run['error_reason'] or '')}", status_code=303)
+            return RedirectResponse("/queue", status_code=303)
+        if run["status"] == "failed":
+            raise HTTPException(409, run["error_reason"])
+        return {"run_id": run["id"], "status": run["status"]}
+
+    @app.post("/calls/{call_id}/move")
+    async def move_call(call_id: str, request: Request):
+        return await _change_call(call_id, request, "move")
+
+    @app.post("/calls/{call_id}/cancel")
+    async def cancel_call(call_id: str, request: Request):
+        return await _change_call(call_id, request, "cancel")
+
+    @app.get("/calendar", response_class=HTMLResponse)
+    def calls_page(notice: str = "") -> str:
+        moment = datetime.now(timezone.utc).isoformat(timespec="minutes")
+        every = db.list_calls()
+        ahead = sorted((c for c in every if c["status"] == "scheduled" and c["start"] > moment), key=lambda c: c["start"])
+        rest = [c for c in every if c not in ahead]
+        connected = engine.harness.mail is not None
+        cards = []
+        for c in ahead:
+            forms = f"""
+                  <form method="post" action="/calls/{c["id"]}/move">
+                    <label>New date and time ({escape(settings.calendar.timezone)})
+                      <input type="datetime-local" name="start" required/></label>
+                    <button>Review this move</button>
+                  </form>
+                  <form method="post" action="/calls/{c["id"]}/cancel">
+                    <label>Message to the attendee
+                      <input type="text" name="message" maxlength="500" placeholder="This call is cancelled."/></label>
+                    <button class="reject">Review this cancellation</button>
+                  </form>""" if connected else ""
+            cards.append(
+                f"""<section class="card">
+                  <h3>{escape(c["subject"] or "Call")}</h3>
+                  <p>{escape(c["label"])}</p>
+                  <p class="meta">with {escape(c["sender"])}</p>{forms}
+                </section>"""
+            )
+        earlier = "".join(
+            f"<tr><td>{escape(c['label'])}</td><td>{escape(c['sender'])}</td>"
+            f"<td><span class=\"s-{'cancelled' if c['status'] == 'cancelled' else 'done'}\">"
+            f"{'cancelled' if c['status'] == 'cancelled' else 'past'}</span></td></tr>"
+            for c in rest
+        )
+        return render("Calls", "calls", f"""
+<h1>Calls</h1>
+<p class="lede">The calls the agent has put in your calendar. A move or a cancellation goes to your approval
+ queue first, and the calendar changes once you approve it there.</p>
+{f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
+{"" if connected else '<p class="banner">No calendar connection yet, so the agent can change no call.</p>'}
+{"".join(cards) or "<p>No call is scheduled. One appears here once a sender picks a time and you approve the invitation.</p>"}
+{f'<h2>Earlier and cancelled</h2><div class="tablewrap"><table><tr><th>Time</th><th>With</th><th>State</th></tr>{earlier}</table></div>' if earlier else ""}
+""")
 
     @app.get("/outbox")
     def outbox() -> list[dict]:

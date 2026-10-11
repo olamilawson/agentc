@@ -114,9 +114,24 @@ creates, so a later mail can be tied to the right one.
 - The `calls` row changes only after Microsoft confirms. A 404 from Graph
   (the event was deleted by hand) is a definite failure and returns the item
   to the queue.
-- Only sender-initiated changes are built. An owner-initiated move or cancel
-  would need an entry point other than a mail, and the calendar already
-  serves that.
+
+## Update, 2026-10-11: the owner can start a move or a cancellation
+
+A second, small graph, `call-change` (`engine/call_change.py`), takes the
+owner's request from the Calls screen: prepare, approval, release. It has no
+model in it.
+
+- Starting it changes nothing. The PRD forbids a change on one tap without
+  the exact content shown first, so the request becomes a queue item and the
+  approval there releases it, through the same two release-class tools.
+- A request that cannot stand (the time is busy or past, the call is not
+  scheduled, there is no calendar connection) fails in the prepare step with
+  its reason and never reaches the queue.
+- The cancellation message is the owner's own text here. In the
+  sender-initiated path it stays fixed, because that path has no trusted
+  author for it.
+- These runs write no ledger row: the ledger holds one row per enquiry. The
+  audit log records the change.
 
 ## Other choices
 

@@ -168,6 +168,12 @@ mail to `https://ijeoma.pro/hooks/n8n/sponsorship` with the header
   changes nothing and says why.
 - A mail about something else, such as a question about the agenda, leaves
   the call alone and goes through ordinary triage.
+- You can start either change yourself on the Calls screen. For a move you
+  give the new date and time on your own clock; for a cancellation you may
+  write the line the attendee reads. The request goes to your approval queue,
+  which shows the exact change, and the calendar changes once you approve it
+  there. A time that is busy, or already past, stops the request at once with
+  the reason.
 - The agent acts on calls it scheduled. An event you created or changed in
   your calendar is yours: if you move one of the agent's events by hand, its
   list still shows the old time.
@@ -176,8 +182,8 @@ mail to `https://ijeoma.pro/hooks/n8n/sponsorship` with the header
 
 - One application holds read, draft and send. The gateway's approval rule is
   what keeps a send to approved content; the permissions alone do not.
-- A move or a cancellation starts from the sender's mail. To move or cancel a
-  call yourself, use your calendar.
+- A move you start may fall outside your stated call hours: the time is your
+  choice, and the agent checks that it is free and in the future.
 - The agent invites one attendee: the sender. Add colleagues in your calendar.
 - The agent knows no public holidays. Block them in your calendar and it
   will skip them.
