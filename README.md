@@ -31,6 +31,12 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Read aloud** — each item on the queue page has a Read aloud button that
+  speaks its subject, notes and content with the browser's own speech
+  synthesis; pressing it again stops. Only an on-device voice is used, so the
+  text is not sent to a voice provider; a browser with no on-device voice says
+  so instead of speaking. For dictation, a system-wide tool such as OpenWhispr
+  types into the page's text boxes with nothing to integrate.
 - **Client retention and deletion** — `/files` lists clients with an upload
   box, a retention period and a delete control. A retention period (days, or
   empty to keep everything) removes that client's files by when they were last

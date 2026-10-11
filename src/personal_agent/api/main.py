@@ -82,6 +82,55 @@ NAV = (
     '<a href="/library">Skill library</a> <a href="/cost">Settings and cost</a></nav>'
 )
 
+# Read aloud on the queue page, with the browser's own speech synthesis. Only an
+# on-device voice is used: some browsers also offer network voices, which would
+# send the text of a draft to the voice's provider.
+READ_ALOUD_SCRIPT = """<script>
+(function () {
+  if (!('speechSynthesis' in window)) return;
+  var synth = window.speechSynthesis, current = null;
+  synth.getVoices();  // starts loading the voice list
+  function reset() { if (current) { current.textContent = 'Read aloud'; current = null; } }
+  function stop() { synth.cancel(); reset(); }
+  function localVoice() {
+    var local = synth.getVoices().filter(function (v) { return v.localService; });
+    var lang = (navigator.language || 'en').slice(0, 2);
+    return local.filter(function (v) { return v.lang.slice(0, 2) === lang; })[0] || local[0] || null;
+  }
+  function read(button) {
+    var voice = localVoice();
+    if (!voice) { button.textContent = 'No on-device voice in this browser'; return; }
+    var card = button.closest('.card');
+    var text = Array.prototype.map.call(card.querySelectorAll('.say'), function (e) { return e.innerText; }).join('\\n');
+    // Markdown marks are for the eye; a list number or a heading sign is not read out.
+    var parts = text.split(/\\n+/).map(function (line) {
+      return line.replace(/^[\\s#>*-]+/, '').replace(/[*_`]/g, '').trim();
+    }).filter(Boolean);
+    if (!parts.length) return;
+    current = button;
+    button.textContent = 'Stop reading';
+    // One utterance per line: some browsers cut a long utterance short.
+    parts.forEach(function (part, i) {
+      var u = new SpeechSynthesisUtterance(part);
+      u.voice = voice;
+      u.lang = voice.lang;
+      if (i === parts.length - 1) u.onend = function () { if (current === button) reset(); };
+      u.onerror = function () { if (current === button) reset(); };
+      synth.speak(u);
+    });
+  }
+  document.querySelectorAll('button.read').forEach(function (button) {
+    button.hidden = false;
+    button.addEventListener('click', function () {
+      var mine = current === button;
+      stop();
+      if (!mine) read(button);
+    });
+  });
+  window.addEventListener('pagehide', stop);
+})();
+</script>"""
+
 PAGE_STYLE = """
  body { font-family: Georgia, serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #faf9f6; }
  h1 { border-bottom: 2px solid #1a1a1a; }
@@ -701,8 +750,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             # Drafted content derives from untrusted material: always escaped.
             content = item["content"]
             notes = "".join(f"<li>{escape(str(note))}</li>" for note in item.get("notes", []))
-            notes = f'<ul class="notes">{notes}</ul>' if notes else ""
-            to = f'<p class="meta">To: {escape(content["to"])}</p>' if content.get("to") else ""
+            notes = f'<ul class="notes say">{notes}</ul>' if notes else ""
+            to = f'<p class="meta say">To: {escape(content["to"])}</p>' if content.get("to") else ""
             approve = {
                 "send": "Approve — send exactly this reply",
                 "acknowledge": "Acknowledge — nothing is sent",
@@ -721,12 +770,13 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             rows.append(
                 f"""
                 <section class="card">
-                  <h2>{escape(content.get("subject", ""))}</h2>
+                  <h2 class="say">{escape(content.get("subject", ""))}</h2>
                   <p class="meta">run {item["run_id"]} · {escape(item["workflow"])} · client {escape(item["client"])}</p>
+                  <button type="button" class="read" hidden>Read aloud</button>
                   {error}
                   {notes}
                   {to}
-                  <pre>{escape(content.get("body", ""))}</pre>
+                  <pre class="say">{escape(content.get("body", ""))}</pre>
                   <p class="meta">content hash: <code>{item["content_hash"]}</code></p>
                   {edit}
                   <div class="actions">
@@ -752,10 +802,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             rows.append(
                 f"""
                 <section class="card">
-                  <h2>Questions before drafting</h2>
+                  <h2 class="say">Questions before drafting</h2>
                   <p class="meta">run {ask["run_id"]} · {escape(ask["workflow"])} · client {escape(ask["client"])}</p>
-                  <p>{escape(ask["goal"])}</p>
-                  <ol>{questions}</ol>
+                  <button type="button" class="read" hidden>Read aloud</button>
+                  <p class="say">{escape(ask["goal"])}</p>
+                  <ol class="say">{questions}</ol>
                   <form method="post" action="/runs/{ask["run_id"]}/input" class="edit">
                     <textarea name="answers" rows="6" placeholder="Your answers"></textarea>
                     <button class="approve">Send answers — continue to the outline</button>
@@ -781,6 +832,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
  button {{ padding: .4rem .8rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
  .approve {{ background: #1a5c3f; color: #fff; }}
  .reject {{ background: #7a2c22; color: #fff; }}
+ .read {{ font-size: .8rem; padding: .25rem .6rem; margin: .2rem 0 .4rem; }}
  nav a {{ margin-right: 1rem; font-size: .9rem; }}
  .banner {{ background: #fbf1d9; border: 1px solid #b7791f; border-radius: 6px; padding: .6rem .8rem; margin: 1rem 0; }}
  .banner.stop {{ background: #f8e3df; border-color: #7a2c22; }}
@@ -791,6 +843,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 {_cap_banner()}
 <p>Nothing leaves the system without your approval. The exact content is shown before any release.</p>
 {listing}
+{READ_ALOUD_SCRIPT}
 </body></html>"""
 
     return app

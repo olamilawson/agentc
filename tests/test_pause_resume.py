@@ -61,3 +61,9 @@ def test_queue_page_shows_exact_content_before_any_release(settings):
     assert VALID_DRAFT["message_subject"] in html
     assert VALID_DRAFT["message_body"] in html
     assert c.get(f"/runs/{run_id}").json()["status"] == "waiting_for_approval"
+
+    # Read aloud: a button per item, hidden until the script finds speech synthesis,
+    # and only ever an on-device voice, so a draft's text is not sent to a voice provider.
+    assert '<button type="button" class="read" hidden>Read aloud</button>' in html
+    assert "speechSynthesis" in html and "v.localService" in html
+    assert 'class="say"' in html
