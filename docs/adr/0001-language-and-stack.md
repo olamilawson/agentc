@@ -39,8 +39,9 @@ Python 3.12 for all agent code, with:
 
 - The Postgres driver and checkpointer come with the `deploy` extra and are
   imported only when the database URL is Postgres, so local runs do not need
-  them. The Postgres checkpoint path is therefore not covered by the test
-  suite, which runs on SQLite.
+  them. The local test suite runs on SQLite and skips the one Postgres
+  checkpoint test (`tests/test_postgres_checkpointer.py`); that test is run on
+  the VPS, inside the API container (README, Deployment).
 - A backup needs both the Postgres dump (app tables and checkpoints) and the
   `./data` directory (client folders); `deploy/backup.sh` takes both.
 - Local development needs Python via uv (uv-managed interpreter) and runs tests
