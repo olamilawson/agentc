@@ -148,8 +148,8 @@ Postgres: when `PERSONAL_AGENT_DATABASE_URL` is a Postgres URL the engine uses
 the Postgres checkpointer and creates its tables at startup; with a SQLite URL
 (local development, tests) it uses the SQLite checkpoint file.
 
-Deploy with `deploy/deploy.sh`, from a checkout at the commit to deploy. It
-builds the api image, runs the Postgres checkpointer test in a throwaway
+Deploy with `deploy/deploy.sh`. It pulls the checkout's branch (fast-forward
+only), builds the api image, runs the Postgres checkpointer test in a throwaway
 container of that image, and only if the test passes replaces the running
 containers and waits for `/health`. A failed or skipped test stops the deploy
 with the old api still running.

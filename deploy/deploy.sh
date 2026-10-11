@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Build the api image, prove the Postgres checkpointer on it, then switch over.
-# Run on the VPS from a checkout that is already at the commit to deploy:
+# Pull, build the api image, prove the Postgres checkpointer on it, then switch over.
+# Run on the VPS:
 #   /opt/personal-agent/deploy/deploy.sh
 # The running api container is replaced only after the test passes.
 set -euo pipefail
 
 COMPOSE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 cd "$COMPOSE_DIR"
+
+# 0. Bring the checkout up to date (fast-forward only: local commits or a
+#    diverged branch stop the deploy), then start again from the pulled copy of
+#    this script, since bash reads a script as it runs it.
+if [ "${1:-}" != "--pulled" ]; then
+  git pull --ff-only
+  exec "$COMPOSE_DIR/deploy/deploy.sh" --pulled
+fi
+
 LOG=$(mktemp)
 trap 'rm -f "$LOG"' EXIT
 
