@@ -26,6 +26,8 @@ class Budgets(BaseModel):
     max_tool_calls: int = 20
     max_cost_usd: float = 5.0
     max_elapsed_seconds: int = 600
+    # Across all runs in a calendar month. None: no cap. The owner sets it.
+    monthly_cap_usd: float | None = None
 
 
 class SponsorshipPolicy(BaseModel):

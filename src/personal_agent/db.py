@@ -180,6 +180,12 @@ class Database:
                 )
             )
 
+    def audited_since(self, action: str, since: str) -> bool:
+        with self.engine.connect() as cx:
+            return cx.execute(
+                select(audit_log.c.id).where(audit_log.c.action == action, audit_log.c.created_at >= since).limit(1)
+            ).first() is not None
+
     # --- runs ----------------------------------------------------------------
     def create_run(self, run_id: str, workflow: str, client: str, inputs: dict, library_version: str) -> None:
         with self.engine.begin() as cx:

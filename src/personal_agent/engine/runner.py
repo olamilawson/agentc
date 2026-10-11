@@ -15,6 +15,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from sqlalchemy.engine import make_url
 
+from personal_agent import costs
 from personal_agent.clients import ClientScope, ClientStore, parse_document
 from personal_agent.config import Settings
 from personal_agent.db import Database, new_id
@@ -290,9 +291,28 @@ class Engine:
         return self.graphs[run["workflow"]]
 
     # --- lifecycle -----------------------------------------------------------
-    def start_run(self, workflow: str, client: str, inputs: dict) -> str:
+    def check_monthly_cap(self, by_hand: bool, what: str) -> None:
+        """At the cap, only a run the owner starts by hand may begin."""
+        cap = costs.current_cap(self.db, self.settings)
+        if cap["state"] == "stopped" and not by_hand:
+            self.db.audit(None, "run_refused_monthly_cap", {"what": what, "cap_usd": cap["cap_usd"]})
+            raise costs.MonthlyCapReached(
+                f"the monthly cap of ${cap['cap_usd']:.2f} is reached; {what} was not started"
+            )
+
+    def _note_cap_alert(self) -> None:
+        # Once a month, when spend first reaches 80 percent of the cap.
+        cap = costs.current_cap(self.db, self.settings)
+        _, month_start, _ = costs.month_bounds()
+        if cap["state"] in ("alert", "stopped") and not self.db.audited_since("monthly_cap_alert", month_start):
+            self.db.audit(None, "monthly_cap_alert", {"cap_usd": cap["cap_usd"], "used": cap["used"]})
+
+    def start_run(self, workflow: str, client: str, inputs: dict, by_hand: bool = True) -> str:
+        """by_hand: the owner started it. A run a watcher or a schedule starts
+        is refused once the month's spend reaches the cap."""
         if workflow not in WORKFLOWS:
             raise UnknownWorkflow(f"unknown workflow {workflow!r}; known: {', '.join(WORKFLOWS)}")
+        self.check_monthly_cap(by_hand, f"a {workflow} run")
         run_id = new_id()
         scope = self.harness.clients.ensure(client)  # one client scope, set here, never changed
         client = scope.name
@@ -454,3 +474,4 @@ class Engine:
             fallback_used=bool(state.get("fallback_used")),
             flags=flags,
         )
+        self._note_cap_alert()

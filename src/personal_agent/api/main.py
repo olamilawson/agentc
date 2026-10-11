@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
-from personal_agent import learning
+from personal_agent import costs, learning
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
@@ -74,6 +74,26 @@ class LedgerCorrection(BaseModel):
     route: str | None = None
     decision: str | None = None
     outcome: str | None = None
+
+
+NAV = '<nav><a href="/queue">Approval queue</a> <a href="/library">Skill library</a> <a href="/cost">Settings and cost</a></nav>'
+
+PAGE_STYLE = """
+ body { font-family: Georgia, serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #faf9f6; }
+ h1 { border-bottom: 2px solid #1a1a1a; }
+ nav a { margin-right: 1rem; font-size: .9rem; }
+ .meta { color: #666; font-size: .85rem; }
+ .total { font-size: 2rem; margin: .5rem 0; }
+ .month a { margin: 0 .75rem; }
+ table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+ th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }
+ .bar { background: #e6e3da; border-radius: 6px; height: .6rem; margin-top: .3rem; }
+ .fill { height: 100%; border-radius: 6px; background: #1a5c3f; }
+ .fill.alert { background: #b7791f; }
+ .fill.stopped { background: #7a2c22; }
+ .banner { background: #fbf1d9; border: 1px solid #b7791f; border-radius: 6px; padding: .6rem .8rem; margin: 1rem 0; }
+ .banner.stop { background: #f8e3df; border-color: #7a2c22; }
+"""
 
 
 def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None) -> FastAPI:
@@ -147,7 +167,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         seen = db.find_run_by_message("sponsorship-triage", body.message_id)
         if seen:  # the watcher polls; a repeated delivery starts nothing
             return {"run_id": seen["id"], "status": seen["status"], "duplicate": True}
-        run_id = engine.start_run("sponsorship-triage", SPONSORSHIP_CLIENT, body.model_dump())
+        try:  # started by the watcher, not by hand: refused once the monthly cap is reached
+            run_id = engine.start_run("sponsorship-triage", SPONSORSHIP_CLIENT, body.model_dump(), by_hand=False)
+        except costs.MonthlyCapReached as e:
+            raise HTTPException(429, str(e))
         return {"run_id": run_id, "status": db.get_run(run_id)["status"], "duplicate": False}
 
     @app.get("/ledger")
@@ -234,6 +257,106 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         # What the owner changed before approving, kept for the learning loop.
         return db.list_owner_edits(run_id)
 
+    # --- cost and settings ------------------------------------------------------------
+    def _cap_banner() -> str:
+        cap = costs.current_cap(db, settings)
+        if cap["state"] == "alert":
+            return (f'<div class="banner">Spend this month is at {cap["used"]:.0%} of the '
+                    f'${cap["cap_usd"]:.2f} cap.</div>')
+        if cap["state"] == "stopped":
+            return (f'<div class="banner stop">The ${cap["cap_usd"]:.2f} monthly cap is reached. Runs started '
+                    "by the mail watcher or a schedule are refused; runs you start still go ahead.</div>")
+        return ""
+
+    @app.get("/costs")
+    def cost_summary(month: str | None = None) -> dict:
+        try:
+            return costs.summary(db, settings, month)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/cost", response_class=HTMLResponse)
+    def cost_page(month: str | None = None) -> str:
+        try:
+            s = costs.summary(db, settings, month)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        before, after = costs.adjacent_months(s["month"])
+
+        def table(title: str, rows: list[dict]) -> str:
+            if not rows:
+                return f"<h2>{title}</h2><p>No runs this month.</p>"
+            body = "".join(
+                f"<tr><td>{escape(r['name'])}</td><td>{r['runs']}</td><td>{r['failed']}</td>"
+                f"<td>{r['tokens']:,}</td><td>${r['cost_usd']:.2f}</td></tr>"
+                for r in rows
+            )
+            return (f"<h2>{title}</h2><table><tr><th></th><th>Runs</th><th>Failed</th><th>Tokens</th>"
+                    f"<th>Cost</th></tr>{body}</table>")
+
+        cap = s["cap"]
+        if cap["state"] == "none":
+            cap_line = "No monthly cap is set (<code>monthly_cap_usd</code> in <code>config/budgets.yaml</code>)."
+        else:
+            width = min(100, round(cap["used"] * 100))
+            cap_line = (
+                f'{cap["used"]:.0%} of the ${cap["cap_usd"]:.2f} monthly cap'
+                f'<div class="bar"><div class="fill {cap["state"]}" style="width:{width}%"></div></div>'
+            )
+        b = settings.budgets
+        routes = "".join(
+            f"<tr><td>{escape(tier)}</td><td>{escape(route.primary)}</td>"
+            f"<td>{escape(route.fallback or 'none')}</td></tr>"
+            for tier, route in settings.route_table.items()
+        )
+        tools = "".join(
+            f"<tr><td>{escape(name)}</td><td>{escape(cls)}</td>"
+            f"<td>{'owner approval for every call' if cls == 'release' else 'none'}</td></tr>"
+            for name, cls in engine.harness.tools.registered()
+        )
+        policy = settings.sponsorship
+        sponsorship = (
+            "not configured: every enquiry escalates" if policy is None else
+            f"pursue at {policy.pursue_at}, decline below {policy.decline_below}, escalate above "
+            + ("any amount" if policy.escalate_above is None else f"{policy.escalate_above:,.0f} naira")
+        )
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8"/><title>Settings and cost — Personal Agent</title>
+<style>{PAGE_STYLE}</style></head>
+<body>
+{NAV}
+<h1>Settings and cost</h1>
+{_cap_banner() if s["month"] == costs.month_bounds()[0] else ""}
+<p class="month"><a href="/cost?month={before}">&larr; {before}</a> <strong>{s["month"]}</strong>
+ <a href="/cost?month={after}">{after} &rarr;</a></p>
+<p class="total">${s["total_usd"]:.2f} <span class="meta">across {s["runs"]} runs</span></p>
+<p>{cap_line}</p>
+{table("By workflow", s["by_workflow"])}
+{table("By client", s["by_client"])}
+<h2>Model routes</h2>
+<table><tr><th>Tier</th><th>Primary</th><th>Fallback</th></tr>{routes}</table>
+<h2>Ceilings for each run</h2>
+<table>
+<tr><td>Cost</td><td>${b.max_cost_usd:.2f}</td></tr>
+<tr><td>Tokens</td><td>{b.max_total_tokens:,}</td></tr>
+<tr><td>Tool calls</td><td>{b.max_tool_calls}</td></tr>
+<tr><td>Elapsed time</td><td>{b.max_elapsed_seconds} seconds</td></tr>
+</table>
+<h2>Connected tools</h2>
+<table><tr><th>Tool</th><th>Class</th><th>Approval</th></tr>{tools}</table>
+<p class="meta">Mail is not connected: <code>send_mail</code> holds approved replies in the local outbox.</p>
+<h2>Other settings</h2>
+<table>
+<tr><td>Sponsorship policy</td><td>{sponsorship}</td></tr>
+<tr><td>Mail watcher webhook</td><td>{"on" if settings.n8n_secret else "off (no shared secret set)"}</td></tr>
+<tr><td>Creative review</td><td>images up to {settings.creative_review.image_max_edge} px,
+ {settings.creative_review.pages_per_group} pages a call, {settings.creative_review.max_pages} pages at most</td></tr>
+<tr><td>Retention per client</td><td>not built yet</td></tr>
+</table>
+<p class="meta">These are read from the files in <code>config/</code> and the server environment.
+ Change them there; this screen does not edit them.</p>
+</body></html>"""
+
     # --- skill library and the learning loop ---------------------------------------
     def _proposal_view(proposal: dict) -> dict:
         """A proposal with its diff against the skill file as it stands now."""
@@ -252,7 +375,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     @app.post("/learning/reviews", status_code=201)
     def start_review(body: ReviewRequest | None = None) -> dict:
         # On the owner's request; the weekly run uses `python -m personal_agent.learning`.
-        return learning.run_review(engine, days=(body.days if body else 7))
+        return learning.run_review(engine, days=(body.days if body else 7), by_hand=True)
 
     @app.get("/learning/proposals")
     def proposals(status: str | None = "pending") -> list[dict]:
@@ -337,6 +460,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
  details {{ margin: .5rem 0; }}
 </style></head>
 <body>
+{NAV}
 <h1>Skill library</h1>
 <p>The agent never edits these files. A change arrives here as a proposal from the learning review and takes effect only when you accept it.</p>
 <p class="meta">library version {version[:12]}</p>
@@ -438,9 +562,14 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
  button {{ padding: .4rem .8rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
  .approve {{ background: #1a5c3f; color: #fff; }}
  .reject {{ background: #7a2c22; color: #fff; }}
+ nav a {{ margin-right: 1rem; font-size: .9rem; }}
+ .banner {{ background: #fbf1d9; border: 1px solid #b7791f; border-radius: 6px; padding: .6rem .8rem; margin: 1rem 0; }}
+ .banner.stop {{ background: #f8e3df; border-color: #7a2c22; }}
 </style></head>
 <body>
+{NAV}
 <h1>Approval queue</h1>
+{_cap_banner()}
 <p>Nothing leaves the system without your approval. The exact content is shown before any release.</p>
 {listing}
 </body></html>"""

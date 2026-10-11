@@ -178,9 +178,11 @@ def _skill_path(skills_dir: Path, skill: str) -> Path:
 
 
 # --- the review ------------------------------------------------------------------------
-def run_review(engine: Engine, days: int = 7, now: datetime | None = None) -> dict:
-    """One learning review over the last `days`; returns its run record."""
+def run_review(engine: Engine, days: int = 7, now: datetime | None = None, by_hand: bool = False) -> dict:
+    """One learning review over the last `days`; returns its run record. The
+    scheduled review is refused at the monthly cap; one the owner starts is not."""
     db, settings = engine.db, engine.settings
+    engine.check_monthly_cap(by_hand, "the learning review")
     now = now or datetime.now(timezone.utc) + timedelta(seconds=1)  # include decisions made this second
     until = now.isoformat(timespec="seconds")
     since = (now - timedelta(days=days)).isoformat(timespec="seconds")
@@ -307,8 +309,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m personal_agent.learning", description=__doc__.split("\n\n")[0])
     parser.add_argument("--days", type=int, default=7, help="how far back the review looks")
     args = parser.parse_args(argv)
+    from personal_agent.costs import MonthlyCapReached
+
     settings = load_settings()
-    run = run_review(Engine(settings, Database(settings.database_url)), days=args.days)
+    try:
+        run = run_review(Engine(settings, Database(settings.database_url)), days=args.days)
+    except MonthlyCapReached as e:
+        print(f"learning review not started: {e}")
+        return 1
     out = run["outputs"]
     print(f"learning review {run['id']}: {run['status']}" + (f" ({run['error_reason']})" if run["error_reason"] else ""))
     for workflow, r in sorted(out["report"].items()):

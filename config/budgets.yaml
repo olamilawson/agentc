@@ -4,3 +4,8 @@ max_total_tokens: 200000
 max_tool_calls: 20
 max_cost_usd: 5.0
 max_elapsed_seconds: 600
+
+# Monthly cap across all runs, in US dollars. The owner is alerted at 80 percent;
+# at 100 percent new runs stop, except runs the owner starts by hand.
+# Not set: the owner has not chosen a cap yet, so there is none.
+# monthly_cap_usd: 100

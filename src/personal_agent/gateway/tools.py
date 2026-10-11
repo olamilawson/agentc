@@ -61,6 +61,10 @@ class ToolGateway:
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
 
+    def registered(self) -> list[tuple[str, str]]:
+        """(name, class) of every tool, for the settings screen."""
+        return sorted((spec.name, spec.cls.value) for spec in self._tools.values())
+
     def call(
         self,
         run_id: str,

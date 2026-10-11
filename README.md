@@ -31,6 +31,15 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Settings and cost** — `/cost` shows the month's spend by workflow and by
+  client (`GET /costs?month=2026-10` for the figures), the monthly cap, the
+  route table, the per-run ceilings and the connected tools. It displays the
+  settings; they are changed in `config/` and the server environment. The
+  monthly cap (`monthly_cap_usd` in `config/budgets.yaml`, unset until the
+  owner chooses one) shows a banner at 80 percent and, at 100 percent, refuses
+  runs the mail watcher or a schedule starts; runs the owner starts from the
+  API or the pages still go ahead. A run's cost counts in the UTC month it was
+  created.
 - **Weekly learning review** — groups what the owner edited, sent back and
   rejected by workflow, and proposes changes to that workflow's skill file as
   diffs. The owner accepts or declines each at `/library`; an accepted change
@@ -188,4 +197,5 @@ docker compose run --rm -v "$PWD/tests:/app/tests:ro" api sh -c "uv pip install 
 4. Learning and tools: the weekly learning review and report exist. Still
    owed: the weekly schedule on the server and a skills directory there that
    is a git checkout; edit capture for the workflows other than drafting;
-   Canva/Higgsfield via MCP; cost screens.
+   Canva/Higgsfield via MCP. The cost screen exists; cost per node on a run,
+   and an alert that reaches the owner outside the app, do not.
