@@ -76,7 +76,7 @@ def load_settings() -> Settings:
         checkpoint_path=ckpt,
         route_table=routes,
         budgets=budgets,
-        skills_dir=REPO_ROOT / "skills",
+        skills_dir=Path(os.environ.get("PERSONAL_AGENT_SKILLS_DIR", str(REPO_ROOT / "skills"))),
         clients_dir=Path(
             os.environ.get("PERSONAL_AGENT_CLIENTS_DIR", str(REPO_ROOT / "data" / "clients"))
         ),

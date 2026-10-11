@@ -25,6 +25,10 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       PERSONAL_AGENT_N8N_SECRET: ${PERSONAL_AGENT_N8N_SECRET:-}
+    volumes:
+      # Client folders and LangGraph checkpoints (the image points both at
+      # /app/data). A host directory, so deploy/backup.sh picks it up.
+      - ./data:/app/data
     depends_on:
       postgres:
         condition: service_healthy

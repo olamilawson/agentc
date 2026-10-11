@@ -103,6 +103,16 @@ complete `deploy/hardening.md`: firewall to SSH/HTTP/HTTPS, key-only SSH,
 automatic security updates, daily encrypted off-server backups with a monthly
 restore drill, and one secret per provider in the server environment.
 
+The image carries `config/` and `skills/` under `/app` and sets
+`PERSONAL_AGENT_ROUTE_TABLE`, `PERSONAL_AGENT_BUDGETS`,
+`PERSONAL_AGENT_SPONSORSHIP` and `PERSONAL_AGENT_SKILLS_DIR` to them, so a
+change to a route, budget, threshold or skill needs `docker compose up -d
+--build`. Client folders and LangGraph checkpoints live in `./data` beside the
+compose file, mounted at `/app/data`; they survive rebuilds and are what
+`deploy/backup.sh` copies. App tables (runs, approvals, audit, ledger) are in
+Postgres. Checkpoints stay on SQLite in deployment for now: the Postgres
+checkpointer named in ADR 0001 is installed in the image but not wired.
+
 ## Next phases (PRD delivery order)
 
 1. Brief evaluation: the graph, the evaluation runner and both safety sets
