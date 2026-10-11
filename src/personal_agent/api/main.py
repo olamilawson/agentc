@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
+from personal_agent import learning
 from personal_agent.engine.runner import Engine, UnknownWorkflow
+from personal_agent.skills.loader import load_library
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
 from personal_agent.harness.models import ModelGateway
 
@@ -33,6 +35,15 @@ class ApprovalDecision(BaseModel):
     comment: str | None = Field(default=None, max_length=4000)
     # Edit then approve: the owner's version of the body, for items that allow it.
     edited_body: str | None = Field(default=None, max_length=400_000)
+
+
+class ReviewRequest(BaseModel):
+    days: int = Field(default=7, ge=1, le=90)
+
+
+class ProposalDecision(BaseModel):
+    decision: str = Field(pattern="^(accepted|declined)$")
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class OwnerInput(BaseModel):
@@ -222,6 +233,120 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     def owner_edits(run_id: str) -> list[dict]:
         # What the owner changed before approving, kept for the learning loop.
         return db.list_owner_edits(run_id)
+
+    # --- skill library and the learning loop ---------------------------------------
+    def _proposal_view(proposal: dict) -> dict:
+        """A proposal with its diff against the skill file as it stands now."""
+        path = settings.skills_dir / proposal["skill"] / "SKILL.md"
+        try:
+            diff = learning.skill_diff(path.read_text(encoding="utf-8"), proposal["find"], proposal["replace"])
+        except (OSError, ValueError) as e:
+            diff = f"(no longer applies: {e})"
+        return {**proposal, "diff": diff}
+
+    @app.get("/skills")
+    def skills() -> dict:
+        version, library = load_library(settings.skills_dir)
+        return {"version": version, "skills": library}
+
+    @app.post("/learning/reviews", status_code=201)
+    def start_review(body: ReviewRequest | None = None) -> dict:
+        # On the owner's request; the weekly run uses `python -m personal_agent.learning`.
+        return learning.run_review(engine, days=(body.days if body else 7))
+
+    @app.get("/learning/proposals")
+    def proposals(status: str | None = "pending") -> list[dict]:
+        return [_proposal_view(p) for p in db.list_proposals(status=status or None)]
+
+    @app.post("/learning/proposals/{proposal_id}")
+    async def decide_proposal(proposal_id: str, request: Request) -> dict:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = ProposalDecision(**(await request.json()))
+        else:
+            form = await request.form()
+            body = ProposalDecision(
+                decision=str(form.get("decision", "")), note=(str(form["note"]) if form.get("note") else None)
+            )
+        try:
+            return learning.decide(engine, proposal_id, body.decision, body.note)
+        except KeyError:
+            raise HTTPException(404, "proposal not found")
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/library", response_class=HTMLResponse)
+    def library_page() -> str:
+        version, library = load_library(settings.skills_dir)
+        cards = []
+        for p in map(_proposal_view, db.list_proposals(status="pending")):
+            cards.append(
+                f"""
+                <section class="card">
+                  <h2>{escape(p["skill"])}</h2>
+                  <p>{escape(p["rationale"] or "")}</p>
+                  <p class="meta">proposal {p["id"]} · rests on runs {escape(", ".join(p["evidence"] or []))}</p>
+                  <pre>{escape(p["diff"])}</pre>
+                  <div class="actions">
+                    <form method="post" action="/learning/proposals/{p["id"]}">
+                      <input type="hidden" name="decision" value="accepted"/>
+                      <button class="approve">Accept — change the skill file</button>
+                    </form>
+                    <form method="post" action="/learning/proposals/{p["id"]}">
+                      <input type="hidden" name="decision" value="declined"/>
+                      <input type="text" name="note" placeholder="why not (optional)"/>
+                      <button class="reject">Decline</button>
+                    </form>
+                  </div>
+                </section>"""
+            )
+        pending = "".join(cards) or "<p>No proposed changes are waiting.</p>"
+        latest = next((r for r in db.list_runs() if r["workflow"] == learning.WORKFLOW and r["outputs"]), None)
+        report = ""
+        if latest:
+            rows = "".join(
+                f"<tr><td>{escape(w)}</td><td>{r['runs']}</td><td>{r['failed_runs']}</td>"
+                f"<td>{'n/a' if r['edit_rate'] is None else format(r['edit_rate'], '.0%')}</td>"
+                f"<td>{'n/a' if r['rejection_rate'] is None else format(r['rejection_rate'], '.0%')}</td>"
+                f"<td>${r['cost_usd']:.2f}</td></tr>"
+                for w, r in sorted(latest["outputs"]["report"].items())
+            )
+            period = latest["outputs"]["period"]
+            report = f"""<h2>Weekly report</h2>
+              <p class="meta">{escape(period["since"])} to {escape(period["until"])}</p>
+              <table><tr><th>Workflow</th><th>Runs</th><th>Failed</th><th>Edit rate</th>
+              <th>Rejection rate</th><th>Cost</th></tr>{rows}</table>"""
+        files = "".join(
+            f"<details><summary>{escape(name)}</summary><pre>{escape(text)}</pre></details>"
+            for name, text in sorted(library.items())
+        )
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8"/><title>Skill library — Personal Agent</title>
+<style>
+ body {{ font-family: Georgia, serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #faf9f6; }}
+ h1 {{ border-bottom: 2px solid #1a1a1a; }}
+ .card {{ background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }}
+ pre {{ white-space: pre-wrap; background: #f4f3ef; padding: .75rem; border-radius: 6px; overflow-x: auto; }}
+ .meta {{ color: #666; font-size: .85rem; }}
+ .actions {{ display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }}
+ form {{ display: flex; gap: .4rem; align-items: center; }}
+ button {{ padding: .4rem .8rem; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer; }}
+ .approve {{ background: #1a5c3f; color: #fff; }}
+ .reject {{ background: #7a2c22; color: #fff; }}
+ table {{ border-collapse: collapse; width: 100%; font-size: .9rem; }}
+ th, td {{ text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }}
+ details {{ margin: .5rem 0; }}
+</style></head>
+<body>
+<h1>Skill library</h1>
+<p>The agent never edits these files. A change arrives here as a proposal from the learning review and takes effect only when you accept it.</p>
+<p class="meta">library version {version[:12]}</p>
+<form method="post" action="/learning/reviews"><button>Run a learning review now</button></form>
+<h2>Proposed changes</h2>
+{pending}
+{report}
+<h2>Skills</h2>
+{files}
+</body></html>"""
 
     @app.get("/queue", response_class=HTMLResponse)
     def queue_page() -> str:

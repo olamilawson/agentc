@@ -123,6 +123,26 @@ outbox = Table(
 )
 
 
+# Changes to the skill library proposed by the weekly learning review. Nothing
+# here changes a skill file until the owner accepts the row.
+skill_proposals = Table(
+    "skill_proposals",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("review_run_id", String, index=True),
+    Column("skill", String, nullable=False),
+    Column("rationale", String),
+    Column("evidence", JSON),  # run ids the proposal rests on
+    Column("find", String),  # exact text in the skill file; empty means append
+    Column("replace", String),
+    Column("status", String, nullable=False, index=True),  # pending | accepted | declined | stale
+    Column("decision_note", String),
+    Column("commit", String),
+    Column("library_version", String),  # the library version the accepted change produced
+    Column("created_at", String),
+    Column("decided_at", String),
+)
+
 # What the owner changed before approving: the draft and the approved version.
 # The weekly learning review reads these; nothing else acts on them.
 owner_edits = Table(
@@ -258,6 +278,66 @@ class Database:
             stmt = stmt.where(owner_edits.c.run_id == run_id)
         with self.engine.connect() as cx:
             return [dict(r) for r in cx.execute(stmt).mappings()]
+
+    def approvals_between(self, since: str, until: str) -> list[dict]:
+        """Every owner decision in the period, with its run's workflow and client."""
+        stmt = (
+            select(approvals, runs.c.workflow, runs.c.client)
+            .join(runs, runs.c.id == approvals.c.run_id)
+            .where(approvals.c.created_at >= since, approvals.c.created_at < until)
+            .order_by(approvals.c.created_at)
+        )
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(stmt).mappings()]
+
+    def owner_edits_between(self, since: str, until: str) -> list[dict]:
+        stmt = (
+            select(owner_edits)
+            .where(owner_edits.c.created_at >= since, owner_edits.c.created_at < until)
+            .order_by(owner_edits.c.created_at)
+        )
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(stmt).mappings()]
+
+    def runs_between(self, since: str, until: str) -> list[dict]:
+        stmt = select(runs).where(runs.c.created_at >= since, runs.c.created_at < until)
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(stmt).mappings()]
+
+    # --- skill proposals (the learning loop) ---------------------------------------
+    def create_proposal(self, review_run_id: str, skill: str, rationale: str, evidence: list[str],
+                        find: str, replace: str) -> str:
+        proposal_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(
+                insert(skill_proposals).values(
+                    id=proposal_id, review_run_id=review_run_id, skill=skill, rationale=rationale,
+                    evidence=evidence, find=find, replace=replace, status="pending", created_at=now(),
+                )
+            )
+        return proposal_id
+
+    def get_proposal(self, proposal_id: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(
+                select(skill_proposals).where(skill_proposals.c.id == proposal_id)
+            ).mappings().first()
+        return dict(row) if row else None
+
+    def list_proposals(self, status: str | None = None) -> list[dict]:
+        stmt = select(skill_proposals).order_by(skill_proposals.c.created_at.desc())
+        if status:
+            stmt = stmt.where(skill_proposals.c.status == status)
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(stmt).mappings()]
+
+    def decide_proposal(self, proposal_id: str, status: str, **fields) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(
+                update(skill_proposals)
+                .where(skill_proposals.c.id == proposal_id)
+                .values(status=status, decided_at=now(), **fields)
+            )
 
     # --- sponsorship ledger ----------------------------------------------------
     def create_ledger_row(self, run_id: str, **fields) -> str:

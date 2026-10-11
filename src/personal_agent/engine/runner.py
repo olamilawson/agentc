@@ -266,10 +266,22 @@ class Engine:
             skills=skills,
         )
         self.checkpointer = open_checkpointer(settings)
+        self._compile_graphs()
+
+    def _compile_graphs(self) -> None:
         self.graphs = {
             name: wf.build(self.harness).compile(checkpointer=self.checkpointer)
             for name, wf in WORKFLOWS.items()
         }
+
+    def reload_library(self) -> str:
+        """Read the skill library again after an accepted change; returns its version.
+        The graphs hold the skill text they were built with, so they are rebuilt."""
+        version, skills = load_library(self.settings.skills_dir)
+        self.harness.skills = skills
+        self.harness.skill_text = skills.get("foundation-test", "")
+        self._compile_graphs()
+        return version
 
     def _graph(self, run_id: str):
         run = self.db.get_run(run_id)

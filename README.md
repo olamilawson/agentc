@@ -31,6 +31,14 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Weekly learning review** — groups what the owner edited, sent back and
+  rejected by workflow, and proposes changes to that workflow's skill file as
+  diffs. The owner accepts or declines each at `/library`; an accepted change
+  is written to the skill file and committed to git, and nothing changes
+  otherwise. The same job produces the weekly report (edit rate, rejection
+  rate, cost and failed runs by workflow). Run it with
+  `python -m personal_agent.learning` from a weekly cron, or from the button on
+  `/library`. See `docs/adr/0007-learning-review.md`.
 - **Strategy drafting graph** — intake (goal and source documents) → questions
   (up to five; the run waits for input) → outline → **owner approves the
   outline** → draft one section at a time → critique (figures in code, then a
@@ -177,5 +185,7 @@ docker compose run --rm -v "$PWD/tests:/app/tests:ro" api sh -c "uv pip install 
    validation of the rubric, templates and writing standard; calibration
    examples; an owner-scored creative set that includes design work; live runs
    of both; and, for drafting, enough approved documents to read an edit rate.
-4. Learning and tools: weekly review of owner edits, skill-library diffs,
-   Canva/Higgsfield via MCP, cost screens.
+4. Learning and tools: the weekly learning review and report exist. Still
+   owed: the weekly schedule on the server and a skills directory there that
+   is a git checkout; edit capture for the workflows other than drafting;
+   Canva/Higgsfield via MCP; cost screens.
