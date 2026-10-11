@@ -31,6 +31,13 @@ this repository implements **Delivery phase 1: Foundation**.
   → owner approval → file the assessment to the client folder. Built and tested
   against recorded responses; not yet run against a live provider or the
   owner-scored gate set.
+- **Runs screen** — `/inspect` lists runs; `/inspect/<run_id>` shows one: each
+  step in order with its status and duration, every model call in it (tier,
+  model, tokens, cost, prompt version, inputs and output, including invalid
+  attempts that were retried), its tool calls, what it wrote to the run, and
+  cost by node. `GET /runs/<run_id>/trace` gives the same as JSON. The trace is
+  kept in the `run_steps` and `model_calls` tables; long text is shortened
+  there and marked as shortened. Runs made before this have totals only.
 - **Settings and cost** — `/cost` shows the month's spend by workflow and by
   client (`GET /costs?month=2026-10` for the figures), the monthly cap, the
   route table, the per-run ceilings and the connected tools. It displays the
@@ -197,5 +204,5 @@ docker compose run --rm -v "$PWD/tests:/app/tests:ro" api sh -c "uv pip install 
 4. Learning and tools: the weekly learning review and report exist. Still
    owed: the weekly schedule on the server and a skills directory there that
    is a git checkout; edit capture for the workflows other than drafting;
-   Canva/Higgsfield via MCP. The cost screen exists; cost per node on a run,
-   and an alert that reaches the owner outside the app, do not.
+   Canva/Higgsfield via MCP. The cost and runs screens exist; an alert that
+   reaches the owner outside the app does not.

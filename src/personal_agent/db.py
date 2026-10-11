@@ -123,6 +123,45 @@ outbox = Table(
 )
 
 
+# The trace of a run (PRD: tracing in run tables). One row each time a graph
+# node finishes, fails or stops to wait for the owner, in order.
+run_steps = Table(
+    "run_steps",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("run_id", String, index=True),
+    Column("seq", Integer),
+    Column("node", String),
+    Column("status", String),  # done | failed | waiting
+    Column("output", JSON),  # what the node wrote to the run's state, long text shortened
+    Column("error", String),
+    Column("duration_ms", Integer),
+    Column("created_at", String),
+)
+
+# One row per model call, including calls whose output was invalid and retried.
+model_calls = Table(
+    "model_calls",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("run_id", String, index=True),
+    Column("step_seq", Integer),  # the run step the call was made in
+    Column("node", String),
+    Column("attempt", Integer),
+    Column("tier", String),
+    Column("model", String),
+    Column("fallback_used", Boolean),
+    Column("prompt_version", String),  # hash of the node's instruction
+    Column("tokens_in", Integer),
+    Column("tokens_out", Integer),
+    Column("cost_usd", Float),
+    Column("outcome", String),  # ok | invalid output | provider error
+    Column("error", String),
+    Column("input", JSON),
+    Column("output", JSON),
+    Column("created_at", String),
+)
+
 # Changes to the skill library proposed by the weekly learning review. Nothing
 # here changes a skill file until the owner accepts the row.
 skill_proposals = Table(
@@ -267,6 +306,50 @@ class Database:
                 .first()
             )
         return dict(row) if row else None
+
+    # --- trace: run steps and model calls ------------------------------------------
+    def _next_seq(self, cx, run_id: str) -> int:
+        return cx.execute(
+            select(func.count()).select_from(run_steps).where(run_steps.c.run_id == run_id)
+        ).scalar_one() + 1
+
+    def record_step(self, run_id: str, node: str, status: str, output: dict | None,
+                    duration_ms: int | None, error: str | None = None) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(
+                insert(run_steps).values(
+                    id=new_id(), run_id=run_id, seq=self._next_seq(cx, run_id), node=node, status=status,
+                    output=output, error=error, duration_ms=duration_ms, created_at=now(),
+                )
+            )
+
+    def record_model_call(self, run_id: str, entry: dict) -> None:
+        with self.engine.begin() as cx:
+            # A call belongs to the step now running: the one after the last recorded.
+            cx.execute(
+                insert(model_calls).values(
+                    id=new_id(), run_id=run_id, step_seq=self._next_seq(cx, run_id), created_at=now(), **entry
+                )
+            )
+
+    def list_steps(self, run_id: str) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(
+                select(run_steps).where(run_steps.c.run_id == run_id).order_by(run_steps.c.seq)
+            ).mappings()]
+
+    def list_model_calls(self, run_id: str) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(
+                select(model_calls).where(model_calls.c.run_id == run_id)
+                .order_by(model_calls.c.step_seq, model_calls.c.created_at, model_calls.c.attempt)
+            ).mappings()]
+
+    def list_tool_calls(self, run_id: str) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(
+                select(tool_calls).where(tool_calls.c.run_id == run_id).order_by(tool_calls.c.created_at)
+            ).mappings()]
 
     # --- owner edits (for the learning loop) -------------------------------------
     def record_owner_edit(self, run_id: str, workflow: str, stage: str | None, before: str, after: str) -> None:

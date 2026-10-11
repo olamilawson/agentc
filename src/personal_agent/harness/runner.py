@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from typing import Callable
 
 from personal_agent.harness.budgets import BudgetTracker
 from personal_agent.harness.contract import OutputInvalid, StepContract, StepFailed
-from personal_agent.harness.models import ModelGateway
+from personal_agent.harness.models import ModelGateway, ProviderError
 
 
 class NodeRunner:
-    def __init__(self, gateway: ModelGateway, tracker: BudgetTracker):
+    def __init__(self, gateway: ModelGateway, tracker: BudgetTracker, record: Callable[[dict], None] | None = None):
+        """record: called once per model call with what the trace keeps of it."""
         self.gateway = gateway
         self.tracker = tracker
+        self.record = record
 
     def run(
         self,
@@ -39,6 +43,8 @@ class NodeRunner:
                     f"\n\nYour previous output was invalid: {error_text}. "
                     "Return a corrected JSON object."
                 )
+            result: dict = {}
+            output = None
             try:
                 # Page images, when a step has them, go with every attempt.
                 result = (
@@ -46,14 +52,47 @@ class NodeRunner:
                     if images
                     else self.gateway.complete(contract, body)
                 )
-                self.tracker.add_usage(
-                    result["usage"]["tokens_in"], result["usage"]["tokens_out"], result["usage"]["cost_usd"]
-                )
-                return contract.validate_output(result["data"])
+                output = contract.validate_output(result["data"])
+                outcome, error_text = "ok", None
             except OutputInvalid as e:  # unparseable JSON or schema violation both retry once
-                error_text = str(e)
+                # An unparseable reply still cost something: the gateway hands its usage over.
+                result = result or getattr(e, "call", {})
+                outcome, error_text = "invalid output", str(e)
+            except ProviderError as e:
+                self._record(contract, attempt, validated_input, {}, None, "provider error", str(e))
+                raise
+            usage = result.get("usage") or {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+            self._record(
+                contract, attempt, validated_input, result, output if outcome == "ok" else result.get("data"),
+                outcome, error_text,
+            )
+            self.tracker.add_usage(usage["tokens_in"], usage["tokens_out"], usage["cost_usd"])
+            if outcome == "ok":
+                return output
 
         raise StepFailed(f"node '{contract.node}' failed validation after retry: {error_text}")
+
+    def _record(self, contract: StepContract, attempt: int, validated_input: dict, result: dict,
+                output, outcome: str, error: str | None) -> None:
+        if not self.record:
+            return
+        usage = result.get("usage") or {}
+        self.record({
+            "node": contract.node,
+            "attempt": attempt + 1,
+            "tier": contract.tier,
+            "model": result.get("model"),
+            "fallback_used": bool(result.get("fallback_used")),
+            # Prompts live in the contract; the hash pins the wording a call used.
+            "prompt_version": hashlib.sha256(contract.instruction.encode()).hexdigest()[:12],
+            "tokens_in": usage.get("tokens_in", 0),
+            "tokens_out": usage.get("tokens_out", 0),
+            "cost_usd": usage.get("cost_usd", 0.0),
+            "outcome": outcome,
+            "error": error,
+            "input": validated_input,
+            "output": output,
+        })
 
     def _minimal_context(self, contract: StepContract, validated_input: dict) -> str:
         lines = [

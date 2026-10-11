@@ -86,14 +86,20 @@ class ModelGateway:
             cost = float(litellm.completion_cost(response))
         except Exception:
             cost = 0.0
-        from personal_agent.harness.contract import _parse_json
+        from personal_agent.harness.contract import OutputInvalid, _parse_json
 
-        return {
-            "data": _parse_json(raw),
+        call = {
+            "data": raw,
             "model": model,
             "fallback_used": fallback_used,
             "usage": {"tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost},
         }
+        try:
+            call["data"] = _parse_json(raw)
+        except OutputInvalid as e:
+            e.call = call  # the reply was paid for even though it cannot be used
+            raise
+        return call
 
 
 class RecordedGateway(ModelGateway):

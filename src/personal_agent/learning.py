@@ -213,7 +213,7 @@ def run_review(engine: Engine, days: int = 7, now: datetime | None = None, by_ha
             ]
             payload = {"skill": workflow, "period": f"{since} to {until}", "evidence_run_ids": run_ids}
             context, _ = build_context(ROLE, skills[workflow], [], chunks, payload)
-            out = NodeRunner(engine.harness.gateway, tracker).run(CONTRACT, payload, context=context)
+            out = engine.harness.node_runner(tracker, run_id).run(CONTRACT, payload, context=context)
             for proposal in out["proposals"]:
                 why = _invalid(proposal, skills[workflow], set(run_ids), client_names)
                 if why:

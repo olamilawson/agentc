@@ -29,7 +29,9 @@ def run_model(
     context, _ = build_context(
         ROLE, rubric, examples or [], untrusted, {k: v for k, v in payload.items() if k not in hide}
     )
-    out = h.node_runner(tracker).run(h.contracts[node], payload, context=context, images=images)
+    out = h.node_runner(tracker, state.get("run_id")).run(
+        h.contracts[node], payload, context=context, images=images
+    )
     return out, {
         "usage": {
             "tokens_in": tracker.tokens_in,

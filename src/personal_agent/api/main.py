@@ -9,6 +9,7 @@ content by hash. Minimal server-rendered UI for now; the full interface
 from __future__ import annotations
 
 import hmac
+import json
 from html import escape
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
-from personal_agent import costs, learning
+from personal_agent import costs, learning, tracing
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
@@ -76,7 +77,10 @@ class LedgerCorrection(BaseModel):
     outcome: str | None = None
 
 
-NAV = '<nav><a href="/queue">Approval queue</a> <a href="/library">Skill library</a> <a href="/cost">Settings and cost</a></nav>'
+NAV = (
+    '<nav><a href="/queue">Approval queue</a> <a href="/inspect">Runs</a> '
+    '<a href="/library">Skill library</a> <a href="/cost">Settings and cost</a></nav>'
+)
 
 PAGE_STYLE = """
  body { font-family: Georgia, serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #faf9f6; }
@@ -93,6 +97,15 @@ PAGE_STYLE = """
  .fill.stopped { background: #7a2c22; }
  .banner { background: #fbf1d9; border: 1px solid #b7791f; border-radius: 6px; padding: .6rem .8rem; margin: 1rem 0; }
  .banner.stop { background: #f8e3df; border-color: #7a2c22; }
+ .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: .6rem 1rem; margin: .75rem 0; }
+ .card h3 { margin: .2rem 0; }
+ .call { border-left: 3px solid #e6e3da; padding-left: .75rem; margin: .5rem 0; }
+ pre { white-space: pre-wrap; background: #f4f3ef; padding: .75rem; border-radius: 6px; overflow-x: auto; font-size: .8rem; }
+ .error { color: #b3261e; }
+ details { margin: .3rem 0; }
+ [class^="s-"] { font-size: .8rem; font-weight: normal; padding: .1rem .4rem; border-radius: 4px; background: #e6e3da; }
+ .s-done { background: #dcebe3; } .s-failed, .s-cancelled { background: #f8e3df; }
+ .s-waiting, .s-waiting_for_approval, .s-waiting_for_input { background: #fbf1d9; }
 """
 
 
@@ -256,6 +269,120 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     def owner_edits(run_id: str) -> list[dict]:
         # What the owner changed before approving, kept for the learning loop.
         return db.list_owner_edits(run_id)
+
+    # --- runs screen ------------------------------------------------------------------
+    @app.get("/runs/{run_id}/trace")
+    def run_trace(run_id: str) -> dict:
+        trace = tracing.build_trace(db, run_id)
+        if trace is None:
+            raise HTTPException(404, "run not found")
+        return trace
+
+    @app.get("/inspect", response_class=HTMLResponse)
+    def runs_page(status: str | None = None) -> str:
+        runs = db.list_runs(status=status or None)[:200]
+        rows = "".join(
+            f'<tr><td><a href="/inspect/{r["id"]}">{escape(r["created_at"][:16].replace("T", " "))}</a></td>'
+            f'<td>{escape(r["workflow"])}</td><td>{escape(r["client"])}</td>'
+            f'<td class="s-{escape(r["status"])}">{escape(r["status"].replace("_", " "))}</td>'
+            f'<td>${(r["cost_usd"] or 0):.2f}</td></tr>'
+            for r in runs
+        )
+        filters = " ".join(
+            f'<a href="/inspect{"?status=" + s if s else ""}">{label}</a>'
+            for s, label in [("", "all"), ("waiting_for_approval", "waiting for approval"),
+                             ("waiting_for_input", "waiting for input"), ("failed", "failed"), ("done", "done")]
+        )
+        table = (
+            f"<table><tr><th>Started (UTC)</th><th>Workflow</th><th>Client</th><th>Status</th><th>Cost</th></tr>{rows}</table>"
+            if runs else "<p>No runs.</p>"
+        )
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8"/><title>Runs — Personal Agent</title><style>{PAGE_STYLE}</style></head>
+<body>
+{NAV}
+<h1>Runs</h1>
+<p class="meta">Show: {filters}. The most recent 200.</p>
+{table}
+</body></html>"""
+
+    @app.get("/inspect/{run_id}", response_class=HTMLResponse)
+    def run_page(run_id: str) -> str:
+        trace = tracing.build_trace(db, run_id)
+        if trace is None:
+            raise HTTPException(404, "run not found")
+        run = trace["run"]
+
+        def block(title: str, value) -> str:
+            if value in (None, [], {}, ""):
+                return ""
+            text = value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False)
+            return f"<details><summary>{title}</summary><pre>{escape(text)}</pre></details>"
+
+        cards = []
+        for step in trace["steps"]:
+            calls = "".join(
+                f"""<div class="call">
+                  <p class="meta">model call, attempt {c["attempt"]} · {escape(c["tier"] or "")} tier ·
+                   {escape(c["model"] or "no model reached")}{" (fallback)" if c["fallback_used"] else ""} ·
+                   {(c["tokens_in"] or 0):,} in, {(c["tokens_out"] or 0):,} out · ${(c["cost_usd"] or 0):.4f} ·
+                   prompt {escape(c["prompt_version"] or "")} ·
+                   <span class="s-{'done' if c['outcome'] == 'ok' else 'failed'}">{escape(c["outcome"])}</span></p>
+                  {f'<p class="error">{escape(c["error"])}</p>' if c["error"] else ""}
+                  {block("Inputs", c["input"])}{block("Output", c["output"])}
+                </div>"""
+                for c in step["model_calls"]
+            )
+            tools = "".join(
+                f'<p class="meta">tool call · {escape(t["tool"])} ({escape(t["tool_class"])}) · '
+                f'<span class="s-{"done" if t["outcome"] in ("executed", "replay") else "failed"}">'
+                f'{escape(t["outcome"].replace("_", " "))}</span></p>{block("Result", t["detail"])}'
+                for t in step["tool_calls"]
+            )
+            duration = "" if step["duration_ms"] is None else f' · {step["duration_ms"] / 1000:.1f}s'
+            kind = "" if step["model_calls"] else " · code, no model"
+            cards.append(
+                f"""<section class="card">
+                  <h3>{step["seq"]}. {escape(step["node"])}
+                   <span class="s-{escape(step["status"])}">{escape(step["status"])}</span></h3>
+                  <p class="meta">${step["cost_usd"]:.4f} · {step["tokens"]:,} tokens{duration}{kind}</p>
+                  {f'<p class="error">{escape(step["error"])}</p>' if step["error"] else ""}
+                  {calls}{tools}{block("What the step wrote to the run", step["output"])}
+                </section>"""
+            )
+        by_node = "".join(
+            f"<tr><td>{escape(n['node'])}</td><td>{n['steps']}</td><td>{n['model_calls']}</td>"
+            f"<td>{n['tokens']:,}</td><td>${n['cost_usd']:.4f}</td></tr>"
+            for n in trace["cost_by_node"]
+        )
+        untraced = (
+            f'<p class="meta">${trace["untraced_cost_usd"]:.4f} of this run\'s cost has no per-node record '
+            "(it ran before tracing was added, or a call's cost could not be read).</p>"
+            if trace["untraced_cost_usd"] > 0.00005 else ""
+        )
+        prompts = ", ".join(f"{escape(node)} {escape(v)}" for node, v in trace["prompt_versions"]) or "none"
+        flags = "".join(f"<li>{escape(str(f))}</li>" for f in run["flags"] or [])
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8"/><title>Run {escape(run["id"][:8])} — Personal Agent</title>
+<style>{PAGE_STYLE}</style></head>
+<body>
+{NAV}
+<h1>{escape(run["workflow"])} <span class="s-{escape(run["status"])}">{escape(run["status"].replace("_", " "))}</span></h1>
+<p class="meta">run {escape(run["id"])} · client {escape(run["client"])} · started {escape(run["created_at"])} ·
+ updated {escape(run["updated_at"])}</p>
+{f'<p class="error">{escape(run["error_reason"])}</p>' if run["error_reason"] else ""}
+<p class="total">${(run["cost_usd"] or 0):.4f} <span class="meta">{(run["tokens_in"] or 0):,} tokens in,
+ {(run["tokens_out"] or 0):,} out{" · a fallback model was used" if run["fallback_used"] else ""}</span></p>
+<p class="meta">skill library {escape((run["skill_library_version"] or "")[:12])} · prompts: {prompts}</p>
+{f'<ul class="meta">{flags}</ul>' if flags else ""}
+{block("Run inputs", tracing.clip(run["inputs"]))}{block("Run outputs", tracing.clip(run["outputs"]))}
+<h2>Cost by node</h2>
+{f'<table><tr><th>Node</th><th>Steps</th><th>Model calls</th><th>Tokens</th><th>Cost</th></tr>{by_node}</table>' if by_node else '<p>No steps were recorded for this run.</p>'}
+{untraced}
+<h2>Steps</h2>
+{"".join(cards) or "<p>No steps were recorded for this run.</p>"}
+{block("Tool calls not tied to a step", trace["unplaced_tool_calls"])}
+</body></html>"""
 
     # --- cost and settings ------------------------------------------------------------
     def _cap_banner() -> str:

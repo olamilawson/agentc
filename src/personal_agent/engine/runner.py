@@ -8,6 +8,7 @@ LangGraph checkpoint is durable) and resumes from its last checkpoint.
 from __future__ import annotations
 
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -15,7 +16,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from sqlalchemy.engine import make_url
 
-from personal_agent import costs
+from personal_agent import costs, tracing
 from personal_agent.clients import ClientScope, ClientStore, parse_document
 from personal_agent.config import Settings
 from personal_agent.db import Database, new_id
@@ -157,8 +158,17 @@ class Harness:
         text = parsed.pop("text")
         return {**parsed, "path": payload["path"], "text": text[:8000], "truncated": len(text) > 8000}
 
-    def node_runner(self, tracker: BudgetTracker) -> NodeRunner:
-        return NodeRunner(self.gateway, tracker)
+    def node_runner(self, tracker: BudgetTracker, run_id: str | None = None) -> NodeRunner:
+        """With a run id, every model call is written to that run's trace."""
+        if run_id is None:
+            return NodeRunner(self.gateway, tracker)
+
+        def record(entry: dict) -> None:
+            self.db.record_model_call(
+                run_id, {**entry, "input": tracing.clip(entry["input"]), "output": tracing.clip(entry["output"])}
+            )
+
+        return NodeRunner(self.gateway, tracker, record)
 
 
 def default_contracts() -> dict[str, StepContract]:
@@ -433,17 +443,32 @@ class Engine:
         config = {"configurable": {"thread_id": run_id}, "recursion_limit": 80}
         graph = self._graph(run_id)
         self.db.update_run(run_id, status="running")
+        clock = time.monotonic()
+
+        def open_step(status: str, error: str | None = None) -> None:
+            # The node that did not finish: the one that failed, or the one waiting on the owner.
+            pending = graph.get_state(config).next
+            if pending:
+                self.db.record_step(
+                    run_id, pending[0], status, None, int((time.monotonic() - clock) * 1000), error
+                )
+
         try:
-            if command is not None:
-                graph.invoke(command, config=config)
-            else:
-                graph.invoke(start_state, config=config)
+            # Streamed so each node's finish is written to the trace as it happens.
+            for chunk in graph.stream(command if command is not None else start_state, config=config, stream_mode="updates"):
+                elapsed, clock = int((time.monotonic() - clock) * 1000), time.monotonic()
+                for node, update in chunk.items():
+                    if node != "__interrupt__":
+                        self.db.record_step(run_id, node, "done", tracing.clip(update), elapsed)
         except (StepFailed, BudgetExceeded) as e:
+            open_step("failed", str(e))
             self._sync(run_id, status_override="failed", error_reason=str(e))
             return
         except Exception as e:  # provider or unexpected errors: stop with a clear reason, keep partial work
+            open_step("failed", f"{type(e).__name__}: {e}")
             self._sync(run_id, status_override="failed", error_reason=f"{type(e).__name__}: {e}")
             return
+        open_step("waiting")
         self._sync(run_id)
 
     def _sync(self, run_id: str, status_override: str | None = None, error_reason: str | None = None) -> None:

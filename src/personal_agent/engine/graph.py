@@ -82,7 +82,7 @@ def build_test_graph(h):
             [("brief", (state["inputs"] or {}).get("context_notes", ""))],
             {"client": state["client"], "objective": (state["inputs"] or {}).get("objective", "")},
         )
-        out = h.node_runner(tracker).run(
+        out = h.node_runner(tracker, state["run_id"]).run(
             h.contracts["draft"],
             {
                 "objective": (state["inputs"] or {}).get("objective", ""),
