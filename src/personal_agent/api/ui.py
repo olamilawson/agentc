@@ -99,7 +99,7 @@ button:hover { background: var(--subtle); }
 .approve:hover { background: #1E293B; }
 .reject { border-color: var(--bad); color: var(--bad); }
 .read { min-height: 44px; font-size: 13px; margin: 8px 0; }
-input[type="text"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea { min-height: 44px; padding: 8px 12px;
+input[type="text"], input[type="email"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea { min-height: 44px; padding: 8px 12px;
   border: 1px solid var(--edge); border-radius: 12px; background: var(--card); color: var(--ink); font: 14px var(--sans); }
 textarea { width: 100%; line-height: 1.5; }
 label { color: var(--ink); }
@@ -194,8 +194,13 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
 </body></html>"""
 
 
-def sign_in_page(brand: str, message: str = "", next_path: str = "/queue") -> str:
+def sign_in_page(brand: str, message: str = "", next_path: str = "/queue", with_code: bool = False) -> str:
     note = f'<p class="error" role="alert">{escape(message)}</p>' if message else ""
+    code = (
+        """<label>Six-digit code from your authenticator app <input type="text" name="code" inputmode="numeric"
+      autocomplete="one-time-code" pattern="[0-9 ]{6,7}" required/></label>"""
+        if with_code else ""
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -205,14 +210,13 @@ def sign_in_page(brand: str, message: str = "", next_path: str = "/queue") -> st
 <body>
 <main class="signin" style="margin-left:auto">
   <h1>{escape(brand)}</h1>
-  <p class="lede">Sign in with your password and the six-digit code showing in your authenticator app.
-   No code is sent to you: the app on your phone shows it.</p>
+  <p class="lede">Sign in with your email and password.</p>
   {note}
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{escape(next_path)}"/>
-    <label>Password <input type="password" name="password" autocomplete="current-password" required autofocus/></label>
-    <label>Six-digit code <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code"
-      pattern="[0-9 ]{{6,7}}" required/></label>
+    <label>Email <input type="email" name="email" autocomplete="username" required autofocus/></label>
+    <label>Password <input type="password" name="password" autocomplete="current-password" required/></label>
+    {code}
     <button class="approve">Sign in</button>
   </form>
 </main>

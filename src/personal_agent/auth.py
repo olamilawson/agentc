@@ -1,16 +1,19 @@
-"""Single-owner login with two-factor (PRD: proxy and login).
+"""Single-owner sign-in (PRD: proxy and login).
 
-One owner, one password, one authenticator app. The password is stored as a
-scrypt hash, the second factor is a time-based one-time code (RFC 6238), and a
-signed cookie carries the session. All three secrets come from the server
-environment; none is in the repository or the database.
+One owner signs in with an email address and a password. The password is
+stored as a scrypt hash and a signed cookie carries the session. The secrets
+come from the server environment; none is in the repository or the database.
 
-The owner creates them on the server:
+A second factor is available and off by default: a time-based one-time code
+from an authenticator app (RFC 6238). The PRD lists two-factor; the owner chose
+email and password. Setting PERSONAL_AGENT_TOTP_SECRET turns the code on.
+
+The owner creates the sign-in on the server:
 
     python -m personal_agent.auth
 
-That asks for a password, then prints the lines for the server's .env file and
-the setup key for an authenticator app.
+That asks for an email address and a password, then prints the lines for the
+server's .env file.
 """
 
 from __future__ import annotations
@@ -86,12 +89,13 @@ def provisioning_uri(secret: str, account: str, issuer: str = "Personal Agent") 
 # --- the guard ---------------------------------------------------------------------
 @dataclass
 class LoginGuard:
-    """Checks a login and signs sessions. Holds the lockout and the last code
-    used in memory: one process serves one owner."""
+    """Checks a sign-in and signs sessions. Holds the lockout in memory: one
+    process serves one owner."""
 
+    email: str
     password_hash: str
-    totp_secret: str
     session_secret: str
+    totp_secret: str | None = None  # set: a one-time code is required as well
     session_hours: int = 12
     failures: list[float] = field(default_factory=list)
     locked_until: float = 0.0
@@ -100,16 +104,22 @@ class LoginGuard:
     def locked(self, now: float | None = None) -> bool:
         return (now if now is not None else time.time()) < self.locked_until
 
-    def check(self, password: str, code: str, now: float | None = None) -> bool:
-        """True for the right password and a fresh code. Five wrong attempts in
-        fifteen minutes lock the login for fifteen minutes."""
+    def check(self, email: str, password: str, code: str = "", now: float | None = None) -> bool:
+        """True for the owner's email and password (and a fresh code, if codes are
+        on). Five wrong attempts in fifteen minutes lock sign-in for fifteen minutes."""
         now = now if now is not None else time.time()
         if self.locked(now):
             return False
-        password_ok = verify_password(password, self.password_hash)  # both checks run on every attempt
-        counter = matching_counter(self.totp_secret, code, now)
-        if password_ok and counter is not None and counter > self.last_counter:
-            self.last_counter = counter  # a code works once
+        # Every check runs on every attempt, so a wrong email takes as long as a wrong password.
+        email_ok = hmac.compare_digest(email.strip().lower().encode(), self.email.strip().lower().encode())
+        password_ok = verify_password(password, self.password_hash)
+        code_ok = True
+        if self.totp_secret:
+            counter = matching_counter(self.totp_secret, code, now)
+            code_ok = counter is not None and counter > self.last_counter
+        if email_ok and password_ok and code_ok:
+            if self.totp_secret:
+                self.last_counter = counter  # a code works once
             self.failures.clear()
             return True
         self.failures = [t for t in self.failures if now - t < LOCK_SECONDS] + [now]
@@ -151,8 +161,15 @@ def qr_text(uri: str) -> str:
 
 def main() -> int:
     import getpass
+    import sys
 
-    print("This sets the owner's login. Nothing is saved: copy the lines below into the server's .env file.")
+    with_code = "--with-code" in sys.argv
+    # Prompts go to the terminal even when the printed lines are sent to a file.
+    print("Your email address: ", end="", file=sys.stderr, flush=True)
+    email = sys.stdin.readline().strip()
+    if "@" not in email or " " in email:
+        print("That does not look like an email address. Nothing was created.")
+        return 1
     password = getpass.getpass("Choose a password (12 characters or more): ")
     if len(password) < 12:
         print("That password has fewer than 12 characters. Nothing was created.")
@@ -160,20 +177,20 @@ def main() -> int:
     if getpass.getpass("Type it again: ") != password:
         print("The two entries differ. Nothing was created.")
         return 1
-    secret = new_totp_secret()
+    secret = new_totp_secret() if with_code else ""
+    print("Copy these lines into the server's .env file:")
     print()
+    print(f"PERSONAL_AGENT_OWNER_EMAIL={email}")
     print(f"PERSONAL_AGENT_OWNER_PASSWORD_HASH={hash_password(password)}")
-    print(f"PERSONAL_AGENT_TOTP_SECRET={secret}")
     print(f"PERSONAL_AGENT_SESSION_SECRET={secrets.token_urlsafe(48)}")
-    print()
-    print("Add this account to your authenticator app. Enter the setup key by hand, or paste the link:")
-    print(f"  setup key: {secret}")
-    print(f"  link:      {provisioning_uri(secret, 'owner')}")
-    print()
-    print("Keep the setup key somewhere safe. With a lost phone and no key, you set the login again from the server.")
-    print()
-    print("Scan this with your authenticator app:")
-    print(qr_text(provisioning_uri(secret, 'owner')))
+    print(f"PERSONAL_AGENT_TOTP_SECRET={secret}")
+    if with_code:
+        print()
+        print("Add this account to your authenticator app, by scanning the code below or typing the setup key:")
+        print(f"  setup key: {secret}")
+        print()
+        print("Scan this with your authenticator app:")
+        print(qr_text(provisioning_uri(secret, email)))
     return 0
 
 

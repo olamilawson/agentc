@@ -75,7 +75,9 @@ class Settings(BaseModel):
     calendar: CalendarPolicy = CalendarPolicy()
     # The name shown in the rail and the page titles.
     brand_name: str = "Personal Agent"
-    # Owner login (see auth.py). All three set: every page needs a session.
+    # Owner sign-in (see auth.py). Email, password hash and session secret all
+    # set: every page needs a session. A TOTP secret adds a one-time code.
+    owner_email: str | None = None
     owner_password_hash: str | None = None
     totp_secret: str | None = None
     session_secret: str | None = None
@@ -120,6 +122,7 @@ def load_settings() -> Settings:
         graph_mailbox=env("MS_GRAPH_MAILBOX") or None,
         graph_calendar=env("MS_GRAPH_CALENDAR") or None,
         calendar=calendar,
+        owner_email=env("PERSONAL_AGENT_OWNER_EMAIL") or None,
         owner_password_hash=env("PERSONAL_AGENT_OWNER_PASSWORD_HASH") or None,
         totp_secret=env("PERSONAL_AGENT_TOTP_SECRET") or None,
         session_secret=env("PERSONAL_AGENT_SESSION_SECRET") or None,

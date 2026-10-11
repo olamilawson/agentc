@@ -77,14 +77,16 @@ the compose file sets the database.
 
 ## 6. Create your sign-in
 
+`./deploy/setup.sh` does this and every other step on this page in one go. It
+asks for your email address and a password, and writes the sign-in into `.env`
+without showing it.
+
 ```bash
-docker compose build api
-docker compose run --rm --no-deps api python -m personal_agent.auth
+cd /opt/personal-agent && git pull && ./deploy/setup.sh
 ```
 
-The command asks for a password, then prints three lines and a setup key.
-Paste the three lines into `.env`. Add the setup key to an authenticator app
-on your phone, and store a copy of the key somewhere safe.
+To change the email or password later, add `--new-sign-in`. To also require a
+code from an authenticator app at sign-in, add `--with-code`.
 
 ## 7. Check the model routes
 
@@ -165,5 +167,5 @@ read the top of the script.
   build the n8n workflow that posts to `/hooks/n8n/sponsorship`.
 - **No live model run has happened yet.** Run one brief through the agent and
   read its trace on the Runs screen before you rely on it.
-- **A lost phone locks you out of the app, not the server.** Repeat step 6 from
-  SSH to set a new sign-in.
+- **A forgotten password is reset from the server.** Run
+  `./deploy/setup.sh --new-sign-in` over SSH or the browser terminal.

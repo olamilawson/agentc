@@ -141,15 +141,19 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     app = FastAPI(title="Personal Agent", version="0.1.0 (foundation)")
 
     # --- sign-in ----------------------------------------------------------------------
-    # With the three login secrets set, every route needs a session except the
+    # With the owner's email, password hash and session secret set, every route needs a session except the
     # health check, the sign-in page and the mail watcher's hook (which has its
     # own secret). With none set, a server refuses every request; a developer's
     # machine serves open.
     guard = (
-        auth.LoginGuard(settings.owner_password_hash, settings.totp_secret, settings.session_secret, settings.session_hours)
-        if settings.owner_password_hash and settings.totp_secret and settings.session_secret
+        auth.LoginGuard(
+            settings.owner_email, settings.owner_password_hash, settings.session_secret,
+            totp_secret=settings.totp_secret, session_hours=settings.session_hours,
+        )
+        if settings.owner_email and settings.owner_password_hash and settings.session_secret
         else None
     )
+    with_code = bool(guard and guard.totp_secret)
 
     @app.middleware("http")
     async def require_session(request: Request, call_next):
@@ -161,7 +165,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             if settings.require_login:
                 return PlainTextResponse(
                     "Sign-in is not set up on this server. Run `python -m personal_agent.auth` there "
-                    "and add its three lines to .env.", status_code=503,
+                    "and add the lines it prints to .env.", status_code=503,
                 )
             return await call_next(request)
         if not guard.valid_session(request.cookies.get(auth.SESSION_COOKIE)):
@@ -179,7 +183,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     def sign_in(next: str = "/queue"):
         if guard is None:
             return RedirectResponse("/queue", status_code=303)
-        return ui.sign_in_page(settings.brand_name, next_path=next)
+        return ui.sign_in_page(settings.brand_name, next_path=next, with_code=with_code)
 
     @app.post("/login")
     async def sign_in_submit(request: Request):
@@ -191,12 +195,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             target = "/queue"  # never redirect off this site
         if guard.locked():
             return HTMLResponse(ui.sign_in_page(
-                settings.brand_name, "Five failed attempts locked sign-in. Try again in 15 minutes.", target
+                settings.brand_name, "Five failed attempts locked sign-in. Try again in 15 minutes.", target, with_code
             ), status_code=429)
-        if not guard.check(str(form.get("password", "")), str(form.get("code", ""))):
+        if not guard.check(str(form.get("email", "")), str(form.get("password", "")), str(form.get("code", ""))):
             db.audit(None, "login_failed", {"locked": guard.locked()})
             return HTMLResponse(ui.sign_in_page(
-                settings.brand_name, "The password or the code did not match. Try again.", target
+                settings.brand_name, "The email or the password did not match. Try again.", target, with_code
             ), status_code=401)
         db.audit(None, "login_succeeded", None)
         response = RedirectResponse(target, status_code=303)

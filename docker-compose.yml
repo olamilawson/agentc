@@ -33,9 +33,11 @@ services:
       MS_GRAPH_CLIENT_SECRET: ${MS_GRAPH_CLIENT_SECRET:-}
       MS_GRAPH_MAILBOX: ${MS_GRAPH_MAILBOX:-}
       MS_GRAPH_CALENDAR: ${MS_GRAPH_CALENDAR:-}
-      # Owner sign-in. On this server the app refuses every request until all
-      # three are set (create them with: python -m personal_agent.auth).
+      # Owner sign-in: email and password. On this server the app refuses every
+      # request until the email, hash and session secret are set (deploy/setup.sh
+      # creates them). A TOTP secret adds a one-time code; empty leaves it off.
       PERSONAL_AGENT_REQUIRE_LOGIN: "1"
+      PERSONAL_AGENT_OWNER_EMAIL: ${PERSONAL_AGENT_OWNER_EMAIL:-}
       PERSONAL_AGENT_OWNER_PASSWORD_HASH: ${PERSONAL_AGENT_OWNER_PASSWORD_HASH:-}
       PERSONAL_AGENT_TOTP_SECRET: ${PERSONAL_AGENT_TOTP_SECRET:-}
       PERSONAL_AGENT_SESSION_SECRET: ${PERSONAL_AGENT_SESSION_SECRET:-}

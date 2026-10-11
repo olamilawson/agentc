@@ -52,14 +52,14 @@ this repository implements **Delivery phase 1: Foundation**.
   to approve. The Calls screen (`/calendar`) lists the calls the agent has
   scheduled, and the owner can start a move or a cancellation there; it goes
   to the approval queue before anything changes.
-- **Sign-in** — one owner, a password and a one-time code from an
-  authenticator app (`src/personal_agent/auth.py`). With the three login
-  secrets set, every route needs a session except `/health`, `/login` and the
-  mail watcher's hook. Five failed attempts lock sign-in for fifteen minutes.
-  On the server (`PERSONAL_AGENT_REQUIRE_LOGIN=1`, set in the compose file) the
-  app refuses every request until the secrets exist; on a developer's machine
-  with none set it serves open. Create the secrets with
-  `python -m personal_agent.auth`.
+- **Sign-in** — one owner, an email address and a password
+  (`src/personal_agent/auth.py`). With the sign-in set, every route needs a
+  session except `/health`, `/login` and the mail watcher's hook. Five failed
+  attempts lock sign-in for fifteen minutes. On the server the app refuses
+  every request until the sign-in exists; on a developer's machine with none
+  set it serves open. `deploy/setup.sh` creates it. The PRD lists two-factor;
+  the owner chose email and password, and a one-time code from an
+  authenticator app stays available with `./deploy/setup.sh --with-code`.
 - **Interface** — the five screens share one shell and stylesheet
   (`src/personal_agent/api/ui.py`), following the owner's Stitch design for
   Chidimma OS: a dark rail, a slate canvas, white cards, a serif for display.
