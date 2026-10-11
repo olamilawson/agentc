@@ -47,6 +47,9 @@ class CreativeReviewSettings(BaseModel):
     max_pages: int = 40
 
 
+from personal_agent.scheduling import CalendarPolicy  # noqa: E402
+
+
 class Settings(BaseModel):
     database_url: str
     checkpoint_path: Path
@@ -67,6 +70,9 @@ class Settings(BaseModel):
     graph_client_id: str | None = None
     graph_client_secret: str | None = None
     graph_mailbox: str | None = None
+    # The address whose calendar the agent reads for free time. None: the mailbox's own.
+    graph_calendar: str | None = None
+    calendar: CalendarPolicy = CalendarPolicy()
     # The name shown in the rail and the page titles.
     brand_name: str = "Personal Agent"
     # Owner login (see auth.py). All three set: every page needs a session.
@@ -104,12 +110,16 @@ def load_settings() -> Settings:
     providers_path = Path(os.environ.get("PERSONAL_AGENT_PROVIDERS", REPO_ROOT / "config" / "providers.yaml"))
     providers = (yaml.safe_load(providers_path.read_text()) or {}) if providers_path.exists() else {}
     env = os.environ.get
+    calendar_path = Path(env("PERSONAL_AGENT_CALENDAR") or REPO_ROOT / "config" / "calendar.yaml")
+    calendar = CalendarPolicy(**(yaml.safe_load(calendar_path.read_text()) if calendar_path.exists() else {}))
     return Settings(
         brand_name=env("PERSONAL_AGENT_NAME") or "Personal Agent",
         graph_tenant_id=env("MS_GRAPH_TENANT_ID") or None,
         graph_client_id=env("MS_GRAPH_CLIENT_ID") or None,
         graph_client_secret=env("MS_GRAPH_CLIENT_SECRET") or None,
         graph_mailbox=env("MS_GRAPH_MAILBOX") or None,
+        graph_calendar=env("MS_GRAPH_CALENDAR") or None,
+        calendar=calendar,
         owner_password_hash=env("PERSONAL_AGENT_OWNER_PASSWORD_HASH") or None,
         totp_secret=env("PERSONAL_AGENT_TOTP_SECRET") or None,
         session_secret=env("PERSONAL_AGENT_SESSION_SECRET") or None,

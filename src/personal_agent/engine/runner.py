@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -104,6 +105,8 @@ class Harness:
         self.tools.register(ToolSpec(name="send_mail", cls=ToolClass.RELEASE, fn=self._send_mail))
         # Read-class: earlier mail to or from an address in the connected mailbox.
         self.tools.register(ToolSpec(name="search_mail", cls=ToolClass.READ, fn=self._search_mail))
+        # Read-class: when the owner's calendar is busy. Free and busy times only.
+        self.tools.register(ToolSpec(name="read_calendar", cls=ToolClass.READ, fn=self._read_calendar))
         # Draft-class: a document in the run's own client folder (reversible).
         self.tools.register(
             ToolSpec(
@@ -156,6 +159,12 @@ class Harness:
         if self.mail is None:
             return {"connected": False, "messages": []}
         return {"connected": True, "messages": self.mail.search_correspondence(payload["address"])}
+
+    def _read_calendar(self, payload: dict) -> dict:
+        if self.mail is None:
+            return {"connected": False, "busy": []}
+        busy = self.mail.busy_periods(datetime.fromisoformat(payload["start"]), datetime.fromisoformat(payload["end"]))
+        return {"connected": True, "busy": [[a.isoformat(), b.isoformat()] for a, b in busy]}
 
     def _hold_mail(self, payload: dict) -> dict:
         outbox_id = self.db.add_to_outbox(

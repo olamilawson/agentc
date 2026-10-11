@@ -1,0 +1,18 @@
+# When the owner takes calls. The pursue reply proposes two times from the
+# calendar inside these limits.
+#
+# PROVISIONAL: the builder chose these values. The owner sets the real ones.
+
+# The owner's time zone. Proposed times are stated in it.
+timezone: Africa/Lagos
+# Monday is 0, Sunday is 6.
+working_days: [0, 1, 2, 3, 4]
+# The first and last moment a call may occupy, in the owner's time zone.
+day_start: "10:00"
+day_end: "16:00"
+# Length of the call, in minutes.
+call_minutes: 30
+# Never propose a time sooner than this many days from now.
+earliest_days_ahead: 2
+# How far ahead to look for a free time, in days.
+look_ahead_days: 14

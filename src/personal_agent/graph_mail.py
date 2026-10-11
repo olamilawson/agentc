@@ -8,6 +8,8 @@ application that signs in as itself (client credentials). Two things use it:
   approved, and sends that draft. The recipient comes from the approved
   content, never from the original message's Reply-To header.
 - search_correspondence: the read-class lookup of earlier mail with a sender.
+- busy_periods: the read-class lookup of when a calendar is busy. It asks for
+  free and busy times only, so no meeting's subject or attendees reach the agent.
 
 n8n still watches the mailbox; this module never polls it.
 
@@ -20,6 +22,7 @@ before that call is definite: nothing was sent.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 import httpx
@@ -48,8 +51,10 @@ def _reason(response: httpx.Response) -> str:
 
 class GraphMail:
     def __init__(self, tenant_id: str, client_id: str, client_secret: str, mailbox: str,
-                 transport: httpx.BaseTransport | None = None, timeout: float = 30.0):
+                 transport: httpx.BaseTransport | None = None, timeout: float = 30.0,
+                 calendar: str | None = None):
         self.tenant_id, self.client_id, self._secret, self.mailbox = tenant_id, client_id, client_secret, mailbox
+        self.calendar = calendar or mailbox  # whose free time to read
         self._http = httpx.Client(transport=transport, timeout=timeout)
         self._token: str | None = None
         self._token_expires = 0.0
@@ -176,7 +181,35 @@ class GraphMail:
         ]
 
 
+    # --- read: when the calendar is busy ----------------------------------------------------
+    def busy_periods(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+        """The periods between start and end when the calendar's owner is not
+        free, as (start, end) in UTC. Tentative and out-of-office count as busy."""
+        stamp = lambda moment: moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
+        response = self._call(
+            "POST", f"/users/{quote(self.calendar)}/calendar/getSchedule", ok=(200,),
+            json={
+                "schedules": [self.calendar],
+                "startTime": {"dateTime": stamp(start), "timeZone": "UTC"},
+                "endTime": {"dateTime": stamp(end), "timeZone": "UTC"},
+                "availabilityViewInterval": 30,
+            },
+        )
+        schedules = response.json().get("value") or [{}]
+        if schedules[0].get("error"):
+            raise GraphError(f"Microsoft Graph could not read the calendar ({schedules[0]['error'].get('message', '')[:200]})")
+
+        def moment(value: dict) -> datetime:
+            return datetime.fromisoformat(value["dateTime"].split(".")[0]).replace(tzinfo=timezone.utc)
+
+        return [
+            (moment(item["start"]), moment(item["end"]))
+            for item in schedules[0].get("scheduleItems", [])
+            if item.get("status") not in ("free", "workingElsewhere")
+        ]
+
+
 def from_settings(settings) -> GraphMail | None:
     """The connection, if all four values are set; otherwise None and mail stays local."""
     values = (settings.graph_tenant_id, settings.graph_client_id, settings.graph_client_secret, settings.graph_mailbox)
-    return GraphMail(*values) if all(values) else None
+    return GraphMail(*values, calendar=settings.graph_calendar) if all(values) else None

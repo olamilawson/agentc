@@ -90,9 +90,12 @@ company does not sponsor.
 ### Pursue
 
 Express real interest in one sentence, naming what makes the opportunity fit.
-Ask the sender for two dates that suit them for a call. Three to five sentences.
-(The calendar is not connected yet, so the reply asks for dates rather than
-proposing them.)
+Then propose a call. Three to five sentences.
+
+- When the inputs give call times, propose those two times word for word,
+  each on its own line, and ask which suits. Propose no other time.
+- When the inputs give no call times, ask the sender for two dates that suit
+  them.
 
 ### Ask for detail
 

@@ -32,6 +32,7 @@ services:
       MS_GRAPH_CLIENT_ID: ${MS_GRAPH_CLIENT_ID:-}
       MS_GRAPH_CLIENT_SECRET: ${MS_GRAPH_CLIENT_SECRET:-}
       MS_GRAPH_MAILBOX: ${MS_GRAPH_MAILBOX:-}
+      MS_GRAPH_CALENDAR: ${MS_GRAPH_CALENDAR:-}
       # Owner sign-in. On this server the app refuses every request until all
       # three are set (create them with: python -m personal_agent.auth).
       PERSONAL_AGENT_REQUIRE_LOGIN: "1"

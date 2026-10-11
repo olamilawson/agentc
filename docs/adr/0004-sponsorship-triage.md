@@ -69,6 +69,17 @@ pursue reply still asks for dates: there is no calendar read yet.
   reply, and the approved content is what is sent either way.
 - The connection has run only against a stand-in for Microsoft's servers.
 
+## Update, 2026-10-11: the pursue reply proposes two dates
+
+The departure from the PRD recorded above is closed. `find call dates` reads
+free and busy times through Graph (`getSchedule`, so no meeting details reach
+the agent) and `scheduling.py` picks two free times in code from the owner's
+preferences in `config/calendar.yaml`, which are provisional. Check reply
+fails a draft that does not state both times word for word. The calendar is
+read again before the send; a time that has gone sends the run back for new
+times, a new draft and a new approval. Creating the calendar event (a
+release-class tool in the PRD) is not built: no step of the graph reaches it.
+
 ## Other choices
 
 - The reply address is the envelope sender from the webhook, fixed in the first

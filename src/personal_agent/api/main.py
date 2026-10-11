@@ -672,6 +672,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             if mail else
             "No mail connection yet: <code>send_mail</code> holds approved replies in the local outbox."
         )
+        cal = settings.calendar
+        call_times = (
+            f"{plural(cal.call_minutes, 'minute')}, {escape(cal.day_start)} to {escape(cal.day_end)} "
+            f"{escape(cal.timezone)}, at least {plural(cal.earliest_days_ahead, 'day')} ahead; "
+            + (f"free time read from {escape(mail.calendar)}" if mail else "no calendar connection, so replies ask for dates")
+        )
         policy = settings.sponsorship
         sponsorship = (
             "no policy file: each enquiry escalates" if policy is None else
@@ -702,6 +708,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <h2>Other settings</h2>
 <table>
 <tr><td>Sponsorship policy</td><td>{sponsorship}</td></tr>
+<tr><td>Call times</td><td>{call_times}</td></tr>
 <tr><td>Mail watcher webhook</td><td>{"on" if settings.n8n_secret else "off (no shared secret set)"}</td></tr>
 <tr><td>Creative review</td><td>images up to {settings.creative_review.image_max_edge} px,
  {settings.creative_review.pages_per_group} pages a call, {settings.creative_review.max_pages} pages at most</td></tr>

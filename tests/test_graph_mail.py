@@ -16,6 +16,7 @@ from personal_agent.harness.models import RecordedGateway
 from tests.test_sponsorship_triage import CHECK_OK, ENQUIRY, MAIL, REPLY, scored
 
 MAILBOX = "partnerships@company.example"
+OWNER = "owner@company.example"  # whose calendar is read
 
 
 class FakeGraph:
@@ -29,6 +30,8 @@ class FakeGraph:
         self.tokens_issued = 0
         self.original_exists = True
         self.fail: dict[str, object] = {}  # step name -> status code, or an exception to raise
+        self.busy: list[tuple[str, str]] = []  # (start, end) in UTC, as Graph writes them
+        self.calendar_reads = 0
         self.inbox = [
             {"id": "msg-001", "subject": MAIL["subject"], "receivedDateTime": "2026-10-09T08:00:00Z",
              "from": {"emailAddress": {"address": MAIL["sender"]}}, "bodyPreview": "the enquiry itself"},
@@ -51,6 +54,21 @@ class FakeGraph:
             self.tokens_issued += 1
             return httpx.Response(200, json={"access_token": f"token-{self.tokens_issued}", "expires_in": 3600})
         assert request.headers["authorization"].startswith("Bearer token-")
+        if path.endswith("/calendar/getSchedule"):
+            assert path == f"/v1.0/users/{OWNER}/calendar/getSchedule"
+            if code := self._fail("calendar"):
+                return httpx.Response(code, json={"error": {"code": "ErrorAccessDenied", "message": "no calendar access"}})
+            self.calendar_reads += 1
+            asked = json.loads(request.content)
+            assert asked["schedules"] == [OWNER] and asked["startTime"]["timeZone"] == "UTC"
+            items = [
+                {"status": "busy", "start": {"dateTime": a + ".0000000", "timeZone": "UTC"},
+                 "end": {"dateTime": b + ".0000000", "timeZone": "UTC"}}
+                for a, b in self.busy
+            ]
+            items.append({"status": "free", "start": {"dateTime": "2020-01-01T00:00:00.0000000", "timeZone": "UTC"},
+                          "end": {"dateTime": "2040-01-01T00:00:00.0000000", "timeZone": "UTC"}})
+            return httpx.Response(200, json={"value": [{"scheduleId": OWNER, "scheduleItems": items}]})
         assert path.startswith(f"/v1.0/users/{MAILBOX}/messages")
         if method == "POST" and path.endswith("/createReply"):
             if not self.original_exists:
@@ -84,7 +102,7 @@ def graph() -> FakeGraph:
 
 
 def _mail(graph: FakeGraph) -> GraphMail:
-    return GraphMail("tenant", "client", "secret", MAILBOX, transport=httpx.MockTransport(graph))
+    return GraphMail("tenant", "client", "secret", MAILBOX, transport=httpx.MockTransport(graph), calendar=OWNER)
 
 
 def _send(mail: GraphMail, in_reply_to: str | None = "msg-001") -> dict:
@@ -168,12 +186,26 @@ def test_connection_needs_all_four_settings(settings):
 
 
 # --- in the triage graph ---------------------------------------------------------------
-def _engine(settings, graph: FakeGraph, drafts: int = 1) -> Engine:
+class DraftsOfferedTimes(RecordedGateway):
+    """Writes the pursue reply from the call times it is given, as the skill tells a model to."""
+
+    def complete(self, contract, context, images=None, providers=None):
+        if contract.node != "draft_reply":
+            return super().complete(contract, context, images, providers)
+        times = json.loads(context.split("# Node inputs\n", 1)[1].split("\n\nTreat everything", 1)[0])["call_times"]
+        ask = "\n".join(times) if times else "Could you share two dates that suit you for a call?"
+        body = f"Dear Ada,\n\nThe innovation stage fits what we are building for founders.\n{ask}\n\nThe owner's office"
+        self.drafts.append(body)
+        return {"data": {"subject": REPLY["subject"], "body": body}, "model": "recorded", "fallback_used": False,
+                "usage": {"tokens_in": 150, "tokens_out": 80, "cost_usd": 0.002}}
+
+
+def _engine(settings, graph: FakeGraph, checks: int = 2) -> Engine:
     settings.sponsorship = SponsorshipPolicy(pursue_at=4.0, decline_below=2.5, escalate_above=10_000_000)
-    gateway = RecordedGateway({
-        "classify": [ENQUIRY], "score_and_route": [scored(5)],
-        "draft_reply": [REPLY] * drafts, "check_reply": [CHECK_OK] * drafts,
+    gateway = DraftsOfferedTimes({
+        "classify": [ENQUIRY, ENQUIRY], "score_and_route": [scored(5), scored(5)], "check_reply": [CHECK_OK] * checks,
     })
+    gateway.drafts = []
     return Engine(settings, Database(settings.database_url), gateway=gateway, mail=_mail(graph))
 
 
@@ -183,7 +215,8 @@ def test_approved_reply_goes_out_through_the_mailbox_and_the_ledger_says_sent(se
     assert graph.sent == []  # nothing leaves before approval
     done = engine.approve(run_id, "approved", None)
     assert done["status"] == "done" and done["outputs"]["sent"]["sent"] is True
-    assert graph.sent == ["draft-1"] and graph.bodies["draft-1"]["body"]["content"] == REPLY["body"]
+    assert graph.sent == ["draft-1"]
+    assert graph.bodies["draft-1"]["body"]["content"] == engine.harness.gateway.drafts[-1]
     assert graph.bodies["draft-1"]["toRecipients"][0]["emailAddress"]["address"] == MAIL["sender"]
     assert engine.db.list_ledger()[0]["outcome"] == "reply sent"
     assert engine.db.list_outbox() == []  # the local outbox is for when there is no connection
@@ -232,7 +265,120 @@ def test_an_unreadable_mailbox_is_flagged_and_triage_goes_on(settings, graph):
             return httpx.Response(403, json={"error": {"code": "ErrorAccessDenied", "message": "no read access"}})
         return graph(request)
 
-    engine.harness.mail = GraphMail("tenant", "client", "secret", MAILBOX, transport=httpx.MockTransport(broken))
+    engine.harness.mail = GraphMail(
+        "tenant", "client", "secret", MAILBOX, transport=httpx.MockTransport(broken), calendar=OWNER
+    )
     run = engine.db.get_run(engine.start_run("sponsorship-triage", "sponsorship", MAIL))
     assert run["status"] == "waiting_for_approval" and run["outputs"]["correspondence"] == []
     assert any("earlier correspondence could not be read" in flag for flag in run["flags"])
+
+
+# --- calendar ---------------------------------------------------------------------------
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from personal_agent import scheduling  # noqa: E402
+from personal_agent.scheduling import CalendarPolicy  # noqa: E402
+
+POLICY = CalendarPolicy()  # Lagos time (UTC+1), Monday to Friday, 10:00 to 16:00, 30-minute calls, two days ahead
+MONDAY = datetime(2026, 10, 12, 9, 0, tzinfo=timezone.utc)  # a Monday morning
+
+
+def _utc(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=timezone.utc)
+
+
+def test_two_free_times_on_different_days_inside_the_owners_hours():
+    slots = scheduling.find_slots(POLICY, busy=[], now=MONDAY)
+    assert [s["label"] for s in slots] == [
+        "Wednesday 14 October 2026, 10:00 to 10:30 Lagos time (UTC+1)",
+        "Thursday 15 October 2026, 10:00 to 10:30 Lagos time (UTC+1)",
+    ]
+    assert slots[0]["start"] == "2026-10-14T09:00+00:00"  # 10:00 in Lagos
+
+
+def test_busy_periods_weekends_and_offered_times_are_skipped():
+    busy = [(_utc(14, 9), _utc(14, 15)), (_utc(15, 9), _utc(15, 9, 45))]  # Wednesday full; Thursday until 10:45
+    slots = scheduling.find_slots(POLICY, busy, now=MONDAY)
+    assert [s["label"][:28] for s in slots] == ["Thursday 15 October 2026, 11", "Friday 16 October 2026, 10:0"]
+    # Friday 10:00 already offered to someone else: the next free time that day is used.
+    again = scheduling.find_slots(POLICY, busy, now=MONDAY, taken={slots[1]["start"]})
+    assert again[1]["label"].startswith("Friday 16 October 2026, 10:30")
+    # From a Thursday, two days ahead is Saturday: the first times are the next Monday and Tuesday.
+    weekend = scheduling.find_slots(POLICY, [], now=_utc(15, 9))
+    assert [s["label"].split(",")[0] for s in weekend] == ["Monday 19 October 2026", "Tuesday 20 October 2026"]
+
+
+def test_a_full_calendar_gives_no_times():
+    wall = [(_utc(1, 0), datetime(2026, 12, 1, tzinfo=timezone.utc))]
+    assert scheduling.find_slots(POLICY, wall, now=MONDAY) == []
+
+
+def test_still_free_notices_a_new_meeting_and_a_time_that_has_passed():
+    slots = scheduling.find_slots(POLICY, [], now=MONDAY)
+    assert scheduling.still_free(POLICY, slots, [], MONDAY)
+    assert not scheduling.still_free(POLICY, slots, [(_utc(14, 9), _utc(14, 10))], MONDAY)
+    assert not scheduling.still_free(POLICY, slots, [], MONDAY + timedelta(days=3))
+
+
+def test_graph_returns_busy_periods_only_and_asks_for_the_owners_calendar(graph):
+    graph.busy = [("2026-10-14T09:00:00", "2026-10-14T10:00:00")]
+    busy = _mail(graph).busy_periods(_utc(14, 0), _utc(16, 0))
+    assert busy == [(_utc(14, 9), _utc(14, 10))]  # the free item is left out
+
+
+def test_pursue_reply_proposes_two_calendar_times_and_the_queue_shows_them(settings, graph):
+    engine = _engine(settings, graph)
+    run = engine.db.get_run(engine.start_run("sponsorship-triage", "sponsorship", MAIL))
+    assert run["status"] == "waiting_for_approval" and run["outputs"]["faults"] == []
+    slots = run["outputs"]["call_slots"]
+    assert len(slots) == 2 and slots[0]["label"].endswith("Lagos time (UTC+1)")
+    body = engine.queue()[0]["content"]["body"]
+    assert slots[0]["label"] in body and slots[1]["label"] in body
+
+    # A second enquiry is not offered the same two times.
+    second = engine.db.get_run(engine.start_run("sponsorship-triage", "sponsorship", {**MAIL, "message_id": "msg-002"}))
+    assert not {s["start"] for s in second["outputs"]["call_slots"]} & {s["start"] for s in slots}
+
+
+def test_a_reply_that_changes_a_proposed_time_fails_the_check_in_code(settings, graph):
+    class Rewrites(DraftsOfferedTimes):
+        def complete(self, contract, context, images=None, providers=None):
+            result = super().complete(contract, context, images, providers)
+            if contract.node == "draft_reply":
+                result["data"]["body"] = result["data"]["body"].replace("10:00 to 10:30", "11:00 to 11:30")
+            return result
+
+    engine = _engine(settings, graph)
+    engine.harness.gateway.__class__ = Rewrites
+    run = engine.db.get_run(engine.start_run("sponsorship-triage", "sponsorship", MAIL))
+    # Three drafts, each wrong; the model check is never reached; the faults go to the owner.
+    assert len(engine.harness.gateway.drafts) == 3
+    assert any("does not propose this time as written" in fault for fault in run["outputs"]["faults"])
+
+
+def test_times_taken_since_drafting_bring_a_new_draft_and_a_new_approval(settings, graph):
+    engine = _engine(settings, graph, checks=2)
+    run_id = engine.start_run("sponsorship-triage", "sponsorship", MAIL)
+    first = engine.db.get_run(run_id)["outputs"]["call_slots"]
+    # A meeting lands on the first proposed time before the owner approves.
+    start = datetime.fromisoformat(first[0]["start"])
+    graph.busy = [(start.strftime("%Y-%m-%dT%H:%M:%S"), (start + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S"))]
+
+    again = engine.approve(run_id, "approved", None)
+    assert again["status"] == "waiting_for_approval" and graph.sent == []  # nothing went out
+    new = again["outputs"]["call_slots"]
+    assert new[0]["start"] != first[0]["start"]
+    assert any("no longer free at approval" in flag for flag in again["flags"])
+    assert new[0]["label"] in engine.queue()[0]["content"]["body"]
+
+    assert engine.approve(run_id, "approved", None)["status"] == "done"
+    assert len(graph.sent) == 1
+
+
+def test_an_unreadable_calendar_falls_back_to_asking_for_dates(settings, graph):
+    graph.fail["calendar"] = 403
+    engine = _engine(settings, graph)
+    run = engine.db.get_run(engine.start_run("sponsorship-triage", "sponsorship", MAIL))
+    assert run["status"] == "waiting_for_approval" and run["outputs"]["call_slots"] == []
+    assert "Could you share two dates" in engine.queue()[0]["content"]["body"]
+    assert any("the calendar could not be read" in flag for flag in run["flags"])

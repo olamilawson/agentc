@@ -1,7 +1,8 @@
 # Connecting the mailbox through Microsoft Graph
 
-The agent sends approved replies from one Outlook mailbox and reads earlier
-mail with a sender in that mailbox. It signs in as a registered application,
+The agent sends approved replies from one Outlook mailbox, reads earlier mail
+with a sender in that mailbox, and reads free and busy times from your
+calendar so a reply can propose a call. It signs in as a registered application,
 with no person's password. A tenant administrator does steps 1 to 4; you do
 steps 5 to 7 on the server.
 
@@ -23,13 +24,14 @@ Open Certificates & secrets, add a client secret, and copy its Value at once;
 the portal shows it one time. Note the expiry date. The agent stops sending on
 that date until you replace the secret.
 
-## 3. Grant two permissions
+## 3. Grant three permissions
 
 Open API permissions, add Microsoft Graph permissions of the **Application**
 type, and choose:
 
 - `Mail.ReadWrite`: read mail and build the reply as a draft
 - `Mail.Send`: send it
+- `Calendars.Read`: read free and busy times
 
 Then choose Grant admin consent.
 
@@ -53,7 +55,9 @@ New-ApplicationAccessPolicy -AppId <application-client-id> `
 Test-ApplicationAccessPolicy -AppId <application-client-id> -Identity <another-mailbox-address>
 ```
 
-The test must report `Denied` for a mailbox outside the group.
+The test must report `Denied` for a mailbox outside the group. If your calendar
+lives in a different mailbox from the one the agent sends from, put both in
+the group.
 
 ## 5. Add the settings on the server
 
@@ -65,6 +69,7 @@ In `/opt/personal-agent/.env`:
 | `MS_GRAPH_CLIENT_ID` | Application (client) ID |
 | `MS_GRAPH_CLIENT_SECRET` | the secret's Value |
 | `MS_GRAPH_MAILBOX` | the mailbox address, for example the sponsorship alias |
+| `MS_GRAPH_CALENDAR` | the address whose calendar holds your meetings; leave empty to use the mailbox |
 
 Then restart:
 
@@ -109,11 +114,27 @@ mail to `https://ijeoma.pro/hooks/n8n/sponsorship` with the header
 - If the mailbox no longer holds the original message, the reply goes as a new
   message to the same address.
 
+## How a proposed call time behaves
+
+- On the pursue route the agent reads your free and busy times and picks two
+  free times in code, on different days, inside the hours in
+  `config/calendar.yaml`. It reads no meeting's subject or attendees.
+- The reply states each time with its zone, for example "Wednesday 14 October
+  2026, 10:00 to 10:30 Lagos time (UTC+1)".
+- The agent does not hold the times in your calendar. It reads the calendar
+  again at approval; if a time has gone, it drafts the reply again with new
+  times and asks for a new approval.
+- A time offered in one reply is not offered in another.
+- With no calendar connection, an unreadable calendar, or fewer than two free
+  times, the reply asks the sender for dates.
+
 ## Limits
 
 - One application holds read, draft and send. The gateway's approval rule is
   what keeps a send to approved content; the permissions alone do not.
-- The agent reads no calendar yet, so the pursue reply still asks the sender
-  for dates.
+- The agent creates no calendar event. Once the sender picks a time, you add
+  the meeting yourself.
+- The agent knows no public holidays. Block them in your calendar and it
+  will skip them.
 - Replies held in the local outbox before the connection existed stay there.
   The agent does not send them afterwards.

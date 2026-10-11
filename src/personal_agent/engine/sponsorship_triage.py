@@ -2,6 +2,7 @@
 
     new enquiry (code) -> classify (model, cheap) -> look up history (code)
         -> score and route (model, strong; the route itself is decided in code)
+        -> find call dates (code; pursue route, from the owner's calendar)
         -> draft reply (model, standard) -> check reply (code facts, then model)
         -> owner approval (interrupt) -> send and log (release-class tool, ledger)
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -25,6 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from personal_agent.config import SponsorshipPolicy
 from personal_agent.db import Database
+from personal_agent import scheduling
 from personal_agent.engine import steps
 from personal_agent.engine.approval import make_approval_node
 from personal_agent.engine.graph import ROLE
@@ -118,6 +121,8 @@ class ReplyIn(BaseModel):
     route: ReplyRoute
     route_reason: str
     missing_information: list[str] = []
+    # Times found free in the owner's calendar, to propose as written. Empty: ask the sender for dates.
+    call_times: list[str] = []
     faults: list[str] = []
 
 
@@ -178,6 +183,14 @@ def sponsorship_contracts() -> dict[str, StepContract]:
             output_schema=ClassifyIn,
             instruction="",
         ),
+        "find_call_dates": StepContract(
+            node="find_call_dates",
+            tier="cheap",  # code node: runs without a model; the tier is unused
+            allowed_tools=["read_calendar"],
+            input_schema=ClassifyIn,
+            output_schema=ClassifyIn,
+            instruction="",
+        ),
         "score_and_route": StepContract(
             node="score_and_route",
             tier="strong",
@@ -200,7 +213,8 @@ def sponsorship_contracts() -> dict[str, StepContract]:
             output_schema=ReplyOut,
             instruction=_instruction(
                 "Write the reply for the given route, following the template and the tone rules. "
-                "State no figure, date, address or commitment that is not in the enquiry. If the "
+                "When the inputs give call times, propose those times word for word and no others. "
+                "State no figure, date, address or commitment that is not in the enquiry or the inputs. If the "
                 "inputs list faults from a previous attempt, correct them.",
                 ReplyOut,
             ),
@@ -221,7 +235,7 @@ def sponsorship_contracts() -> dict[str, StepContract]:
         "send_and_log": StepContract(
             node="send_and_log",
             tier="cheap",  # code node: runs without a model; the tier is unused
-            allowed_tools=["send_mail"],
+            allowed_tools=["send_mail", "read_calendar"],
             input_schema=SendIn,
             output_schema=SendIn,
             instruction="",
@@ -386,6 +400,7 @@ def sponsorship_outputs(state: dict) -> dict | None:
         "summary": state.get("summary"),
         "faults": state.get("faults", []),
         "ledger_id": state.get("ledger_id"),
+        "call_slots": state.get("call_slots", []),
         "sent": state.get("sent"),
     }
     if state.get("reply_body"):
@@ -420,12 +435,14 @@ class TriageState(TypedDict, total=False):
     route: str
     route_reason: str
     ledger_id: str
+    call_slots: list[dict]
     reply_subject: str
     reply_body: str
     faults: list[str]
     check_returns: int
     approval_error: str | None
     approved_hash: str
+    redraft: bool
     sent: dict
     error: str | None
 
@@ -435,6 +452,7 @@ def build_sponsorship_graph(h):
     db = h.db
     skill_text = h.skills.get(SKILL, "")
     policy = h.settings.sponsorship
+    calendar = h.settings.calendar
 
     def run_model(node: str, state: TriageState, payload: dict, rubric: str) -> tuple[dict, dict]:
         # The mail and the ledger history are data: both come from outside senders.
@@ -531,7 +549,41 @@ def build_sponsorship_graph(h):
         }
 
     def after_route(state: TriageState) -> str:
-        return "approval" if state["route"] == "escalate" else "draft_reply"
+        if state["route"] == "escalate":
+            return "approval"
+        return "find_call_dates" if state["route"] == "pursue" else "draft_reply"
+
+    def read_busy(state: TriageState, node: str, now: datetime) -> list[tuple[datetime, datetime]]:
+        start, end = scheduling.search_window(calendar, now)
+        found = h.tools.call(
+            state["run_id"], node, h.contracts[node].allowed_tools, "read_calendar",
+            {"start": start.isoformat(), "end": end.isoformat()},
+        )
+        return [(datetime.fromisoformat(a), datetime.fromisoformat(b)) for a, b in found["busy"]]
+
+    def find_call_dates(state: TriageState) -> dict:
+        # Code node: two free times from the owner's calendar, never chosen by a
+        # model. With no calendar, or none free, the reply asks the sender for dates.
+        flags = list(state.get("flags", []))
+        if h.mail is None:
+            return {"call_slots": []}
+        now = datetime.now(timezone.utc)
+        try:
+            busy = read_busy(state, "find_call_dates", now)
+        except GraphError as e:
+            return {"call_slots": [], "flags": flags + [f"the calendar could not be read, so the reply asks for dates: {e}"]}
+        # Times already offered in another reply are not offered twice.
+        taken = {
+            slot["start"]
+            for run in db.list_runs()
+            if run["workflow"] == "sponsorship-triage" and run["id"] != state["run_id"]
+            and run["status"] in ("waiting_for_approval", "done")
+            for slot in (run["outputs"] or {}).get("call_slots") or []
+        }
+        slots = scheduling.find_slots(calendar, busy, now, taken)
+        if len(slots) < 2:
+            return {"call_slots": [], "flags": flags + ["the calendar has fewer than two free times, so the reply asks for dates"]}
+        return {"call_slots": slots}
 
     def draft_reply(state: TriageState) -> dict:
         out, usage = run_model(
@@ -545,6 +597,7 @@ def build_sponsorship_graph(h):
                 "route": state["route"],
                 "route_reason": state["route_reason"],
                 "missing_information": state["missing_information"],
+                "call_times": [slot["label"] for slot in state.get("call_slots", [])],
                 "faults": state.get("faults", []),
             },
             skill_text,
@@ -553,7 +606,11 @@ def build_sponsorship_graph(h):
 
     def check_reply(state: TriageState) -> dict:
         # Facts first, without a model: an invented figure or address goes straight back.
-        faults = unsupported_facts(f"{state['reply_subject']}\n{state['reply_body']}", state["enquiry_text"])
+        offered = [slot["label"] for slot in state.get("call_slots", [])]
+        reply = f"{state['reply_subject']}\n{state['reply_body']}"
+        faults = unsupported_facts(reply, "\n".join([state["enquiry_text"], *offered]))
+        # A time the calendar found free goes into the reply as written, or not at all.
+        faults += [f"the reply does not propose this time as written: {time}" for time in offered if time not in reply]
         usage: dict = {}
         if not faults:
             out, usage = run_model(
@@ -588,6 +645,18 @@ def build_sponsorship_graph(h):
             )
             return {"approval_error": None, "error": None}
         payload = h.contracts["send_and_log"].validate_input(approval_payload(state))
+        if state.get("call_slots"):
+            # Approval can come hours after the times were found: confirm them before sending.
+            now = datetime.now(timezone.utc)
+            try:
+                free = scheduling.still_free(calendar, state["call_slots"], read_busy(state, "send_and_log", now), now)
+            except GraphError as e:
+                return {"approval_error": f"The reply was not sent: the calendar could not be read to confirm "
+                                          f"the proposed times ({e}). Approve again to retry."}
+            if not free:
+                note = "a proposed time was no longer free at approval, so the reply was drafted again with new times"
+                return {"approval_error": None, "redraft": True, "faults": [], "check_returns": 0,
+                        "flags": list(state.get("flags", [])) + [note]}
         try:
             sent = h.tools.call(
                 state["run_id"], "send_and_log", h.contracts["send_and_log"].allowed_tools, "send_mail", payload
@@ -610,9 +679,11 @@ def build_sponsorship_graph(h):
             decision="reply approved by owner",
             outcome="reply sent" if sent.get("sent") else "reply held in the local outbox; mail is not connected",
         )
-        return {"sent": sent, "approval_error": None, "error": None}
+        return {"sent": sent, "approval_error": None, "error": None, "redraft": False}
 
     def after_send(state: TriageState) -> str:
+        if state.get("redraft") and not state.get("sent"):
+            return "find_call_dates"  # new times, a new draft, and a new approval
         return "approval" if state.get("approval_error") else END
 
     builder = StateGraph(TriageState)
@@ -620,6 +691,7 @@ def build_sponsorship_graph(h):
     builder.add_node("classify", classify)
     builder.add_node("look_up_history", look_up_history)
     builder.add_node("score_and_route", score_and_route)
+    builder.add_node("find_call_dates", find_call_dates)
     builder.add_node("draft_reply", draft_reply)
     builder.add_node("check_reply", check_reply)
     builder.add_node("approval", approval)
@@ -629,8 +701,10 @@ def build_sponsorship_graph(h):
     builder.add_conditional_edges("classify", after_classify, {END: END, "look_up_history": "look_up_history"})
     builder.add_edge("look_up_history", "score_and_route")
     builder.add_conditional_edges(
-        "score_and_route", after_route, {"approval": "approval", "draft_reply": "draft_reply"}
+        "score_and_route", after_route,
+        {"approval": "approval", "draft_reply": "draft_reply", "find_call_dates": "find_call_dates"},
     )
+    builder.add_edge("find_call_dates", "draft_reply")
     builder.add_edge("draft_reply", "check_reply")
     builder.add_conditional_edges(
         "check_reply", after_check, {"draft_reply": "draft_reply", "approval": "approval"}
@@ -638,5 +712,7 @@ def build_sponsorship_graph(h):
     builder.add_conditional_edges(
         "approval", after_approval, {"approval": "approval", "send_and_log": "send_and_log"}
     )
-    builder.add_conditional_edges("send_and_log", after_send, {"approval": "approval", END: END})
+    builder.add_conditional_edges(
+        "send_and_log", after_send, {"approval": "approval", "find_call_dates": "find_call_dates", END: END}
+    )
     return builder
