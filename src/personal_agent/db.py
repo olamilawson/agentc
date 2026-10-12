@@ -153,6 +153,17 @@ calls = Table(
 )
 
 # Clients whose runs may only reach providers approved for confidential work.
+# The owner's choice of model for a tier, made on the Settings screen. A row
+# replaces that tier's line in config/route_table.yaml; no row leaves the file's.
+model_routes = Table(
+    "model_routes",
+    metadata,
+    Column("tier", String, primary_key=True),
+    Column("primary", String, nullable=False),
+    Column("fallback", String),
+    Column("updated_at", String),
+)
+
 # A row means restricted; no row means not.
 restricted_clients = Table(
     "restricted_clients",
@@ -360,6 +371,18 @@ class Database:
         with self.engine.begin() as cx:
             cx.execute(delete(client_settings).where(client_settings.c.name == client))
             cx.execute(delete(restricted_clients).where(restricted_clients.c.name == client))
+
+    def model_routes(self) -> dict[str, dict]:
+        with self.engine.connect() as cx:
+            return {
+                r["tier"]: {"primary": r["primary"], "fallback": r["fallback"]}
+                for r in cx.execute(select(model_routes)).mappings()
+            }
+
+    def set_model_route(self, tier: str, primary: str, fallback: str | None) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(model_routes).where(model_routes.c.tier == tier))
+            cx.execute(insert(model_routes).values(tier=tier, primary=primary, fallback=fallback, updated_at=now()))
 
     def is_restricted(self, client: str) -> bool:
         with self.engine.connect() as cx:

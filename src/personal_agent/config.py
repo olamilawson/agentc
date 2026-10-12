@@ -21,6 +21,15 @@ class TierRoute(BaseModel):
     fallback: str | None = None
 
 
+class ModelChoice(BaseModel):
+    """One model offered on the Settings screen (config/models.yaml)."""
+
+    id: str
+    label: str
+    key: str | None = None  # the setting the server needs before this model can answer
+    open: bool = False  # open-weight
+
+
 class Budgets(BaseModel):
     max_total_tokens: int = 200_000
     max_tool_calls: int = 20
@@ -73,6 +82,8 @@ class Settings(BaseModel):
     # The address whose calendar the agent reads for free time. None: the mailbox's own.
     graph_calendar: str | None = None
     calendar: CalendarPolicy = CalendarPolicy()
+    # The models the Settings screen offers for each tier's route.
+    model_catalogue: list[ModelChoice] = []
     # The name shown in the rail and the page titles.
     brand_name: str = "Chidimma OS"
     # The name the home screen greets.
@@ -116,7 +127,10 @@ def load_settings() -> Settings:
     env = os.environ.get
     calendar_path = Path(env("PERSONAL_AGENT_CALENDAR") or REPO_ROOT / "config" / "calendar.yaml")
     calendar = CalendarPolicy(**(yaml.safe_load(calendar_path.read_text()) if calendar_path.exists() else {}))
+    models_path = Path(env("PERSONAL_AGENT_MODELS") or REPO_ROOT / "config" / "models.yaml")
+    catalogue = (yaml.safe_load(models_path.read_text()) or {}).get("models", []) if models_path.exists() else []
     return Settings(
+        model_catalogue=[ModelChoice(**m) for m in catalogue],
         brand_name=env("PERSONAL_AGENT_NAME") or "Chidimma OS",
         owner_name=env("PERSONAL_AGENT_OWNER_NAME") or "Chidimma",
         graph_tenant_id=env("MS_GRAPH_TENANT_ID") or None,

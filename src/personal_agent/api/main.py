@@ -11,6 +11,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -27,6 +28,7 @@ from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
 from personal_agent import auth, costs, learning, retention, tracing
+from personal_agent.engine import think
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
@@ -167,7 +169,7 @@ SHEET_SCRIPT = """<script>
 })();
 </script>"""
 
-# The home screen's bar. The goal travels to the New work screen in the browser's
+# The home screen's bar. The question travels to the Think screen in the browser's
 # own session storage, so client detail never lands in a URL or a server log.
 DOCK_SCRIPT = """<script>
 (function () {
@@ -185,7 +187,7 @@ GOAL_SCRIPT = """<script>
 (function () {
   var goal = null;
   try { goal = sessionStorage.getItem('goal'); sessionStorage.removeItem('goal'); } catch (e) {}
-  var field = document.querySelector('textarea[name="goal"]');
+  var field = document.querySelector('textarea[name="question"]');
   if (goal && field) { field.value = goal; field.focus(); }
 })();
 </script>"""
@@ -281,7 +283,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         waiting = len(db.list_runs(status="waiting_for_approval")) + len(db.list_runs(status="waiting_for_input"))
         today = datetime.now(_zone())
         return ui.page(
-            title, active, body, brand=settings.brand_name, waiting=waiting,
+            title, active, body, brand=settings.brand_name, waiting=waiting, today_count=waiting + len(_calls_today()),
             signed_in=guard is not None, script=script, refresh=refresh, dock=dock,
             clients=engine.harness.clients.list_clients(), today=f"{today:%A}, {today.day} {today:%B %Y}",
         )
@@ -648,7 +650,9 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 """)
 
     # --- new work ---------------------------------------------------------------------
-    KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY"}
+    KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY",
+                 "groq": "GROQ_API_KEY", "openrouter": "OPENROUTER_API_KEY",
+                 "ollama": "OLLAMA_API_BASE", "ollama_chat": "OLLAMA_API_BASE"}
 
     def _missing_model_keys() -> list[str]:
         """Names of the provider keys the route table needs and the server lacks."""
@@ -714,7 +718,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <button class="approve">Start this draft</button>
   </form>
 </section>
-""", script=GOAL_SCRIPT)
+""")
 
     @app.post("/new")
     async def start_new_work(request: Request, background: BackgroundTasks):
@@ -923,8 +927,91 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         except ValueError as e:
             raise HTTPException(400, str(e))
 
+    # --- model routes -----------------------------------------------------------------
+    MODEL_ID = re.compile(r"[a-z0-9_]+/[A-Za-z0-9._:/-]{1,120}")
+
+    def _key_for(model: str) -> str | None:
+        """The setting this model needs and the server lacks; None when it is there."""
+        known = next((m.key for m in settings.model_catalogue if m.id == model), None)
+        name = known or KEY_NAMES.get(model.split("/", 1)[0].lower())
+        return name if name and not os.environ.get(name) else None
+
+    def _models_section(notice: str = "") -> str:
+        def options(current: str | None, none: bool = False) -> str:
+            out = ['<option value="">None</option>'] if none else []
+            listed = False
+            for m in settings.model_catalogue:
+                listed = listed or m.id == current
+                lacks = _key_for(m.id)
+                out.append(
+                    f'<option value="{escape(m.id)}"{" selected" if m.id == current else ""}>{escape(m.label)}'
+                    f'{" · open-weight" if m.open else ""}{f" · needs {lacks}" if lacks else ""}</option>'
+                )
+            if current and not listed:
+                out.append(f'<option value="{escape(current)}" selected>{escape(current)}</option>')
+            return "".join(out)
+
+        uses = {"cheap": "Routine steps: sorting, extracting, short checks", "standard": "Most drafting and scoring",
+                "strong": "The hardest steps: long documents, final checks"}
+        forms = "".join(
+            f"""<form method="post" action="/models/route" class="route">
+  <input type="hidden" name="tier" value="{escape(tier)}"/>
+  <div><h3>{escape(tier.capitalize())}</h3><p class="meta">{uses.get(tier, "")}</p>
+    <p class="meta">Now: <code>{escape(route.primary)}</code>{f" · needs {_key_for(route.primary)}" if _key_for(route.primary) else ""}</p></div>
+  <label>Model <select name="primary">{options(route.primary)}</select></label>
+  <label>or another model's id <input type="text" name="primary_other" placeholder="provider/model" maxlength="130" autocomplete="off"/></label>
+  <label>If that provider fails <select name="fallback">{options(route.fallback, none=True)}</select></label>
+  <span class="actions"><button class="approve">Use for {escape(tier)}</button>
+    <button formaction="/models/test" formnovalidate>Test this model</button></span>
+</form>"""
+            for tier, route in settings.route_table.items()
+        )
+        return f"""<h2 id="models">Models</h2>
+<p class="lede">Each step of the agent's work belongs to one of these tiers. Choose the model each tier uses. Test a model
+ before you rely on it: the test makes one small call and reports the reply.</p>
+{f'<div class="banner" role="status">{escape(notice)}</div>' if notice else ""}
+<section class="card">{forms}</section>"""
+
+    def _chosen_model(form) -> str:
+        return str(form.get("primary_other") or "").strip() or str(form.get("primary") or "").strip()
+
+    def _models_notice(text: str):
+        return RedirectResponse(f"/cost?notice={quote(text)}#models", status_code=303)
+
+    @app.post("/models/route")
+    async def set_model_route(request: Request):
+        form = await request.form()
+        tier, primary = str(form.get("tier") or ""), _chosen_model(form)
+        fallback = str(form.get("fallback") or "").strip() or None
+        if tier not in settings.route_table:
+            raise HTTPException(400, "no such tier")
+        for model in filter(None, (primary, fallback)):
+            if not MODEL_ID.fullmatch(model):
+                return _models_notice(f"'{model}' is not a model id. An id looks like provider/model.")
+        if not primary:
+            return _models_notice("Choose a model, or type its id.")
+        if fallback == primary:
+            fallback = None
+        engine.set_route(tier, primary, fallback)
+        lacks = _key_for(primary)
+        return _models_notice(
+            f"The {tier} tier now uses {primary}."
+            + (f" The server has no {lacks} yet, so its steps stop until you add it." if lacks else "")
+        )
+
+    @app.post("/models/test")
+    async def test_model(request: Request):
+        model = _chosen_model(await request.form())
+        if not MODEL_ID.fullmatch(model):
+            return _models_notice("Choose a model to test, or type its id as provider/model.")
+        result = engine.harness.gateway.probe(model)
+        db.audit(None, "model_tested", {"model": model, "ok": result["ok"]})
+        return _models_notice(
+            f"{model} answered: {result['detail']}." if result["ok"] else f"{model} did not answer. {result['detail']}"
+        )
+
     @app.get("/cost", response_class=HTMLResponse)
-    def cost_page(month: str | None = None) -> str:
+    def cost_page(month: str | None = None, notice: str = "") -> str:
         try:
             s = costs.summary(db, settings, month)
         except ValueError as e:
@@ -952,11 +1039,6 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 f'<div class="bar"><div class="fill {cap["state"]}" style="width:{width}%"></div></div>'
             )
         b = settings.budgets
-        routes = "".join(
-            f"<tr><td>{escape(tier)}</td><td>{escape(route.primary)}</td>"
-            f"<td>{escape(route.fallback or 'none')}</td></tr>"
-            for tier, route in settings.route_table.items()
-        )
         tools = "".join(
             f"<tr><td>{escape(name)}</td><td>{escape(cls)}</td>"
             f"<td>{'owner approval for every call' if cls == 'release' else 'none'}</td></tr>"
@@ -989,8 +1071,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <p>{cap_line}</p>
 {table("By workflow", s["by_workflow"])}
 {table("By client", s["by_client"])}
-<h2>Model routes</h2>
-<div class="tablewrap"><table><tr><th>Tier</th><th>Primary</th><th>Fallback</th></tr>{routes}</table></div>
+{_models_section(notice)}
 <h2>Ceilings for each run</h2>
 <table>
 <tr><td>Cost</td><td>${b.max_cost_usd:.2f}</td></tr>
@@ -1118,7 +1199,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     TAGS = {
         "brief-evaluation": ("Brief", "c-blue"), "strategy-drafting": ("Strategy", "c-purple"),
         "creative-review": ("Creative", "c-rose"), "sponsorship-triage": ("Sponsorship", "c-amber"),
-        "call-change": ("Calls", "c-emerald"),
+        "call-change": ("Calls", "c-emerald"), "think": ("Think", "c-purple"),
     }
     STATUS_WORDS = {
         "waiting_for_approval": "waiting for you", "waiting_for_input": "has questions for you",
@@ -1172,13 +1253,14 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         missing = _missing_model_keys()
         key_state = f"No {' or '.join(missing)} on the server yet" if missing else "Model key set"
         dock = f"""<div class="dock">
-  <form action="/new#draft" method="get" id="ask">
-    <label for="ask-goal" style="position:absolute;left:-9999px">Tell the agent what you need</label>
-    <input type="text" id="ask-goal" placeholder="Tell the agent what you need" autocomplete="off" maxlength="2000"/>
+  <form action="/think" method="get" id="ask">
+    <label for="ask-goal" style="position:absolute;left:-9999px">Ask a question</label>
+    <input type="text" id="ask-goal" placeholder="Ask a question" autocomplete="off" maxlength="2000"/>
     <span class="kbd">Ctrl K</span>
-    <button aria-label="Start a draft with this goal">{icon("up")}</button>
+    <button aria-label="Take this question to Think">{icon("up")}</button>
   </form>
   <div class="pills">
+    <a href="/think">{icon("think")}Think</a>
     <a href="/new#brief">{icon("brief")}Evaluate a brief</a>
     <a href="/new#creative">{icon("creative")}Review creative work</a>
     <a href="/new#draft">{icon("draft")}Draft a document</a>
@@ -1218,6 +1300,229 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
   </section>
 </div>
 """, script=DOCK_SCRIPT, dock=dock)
+
+    # --- today ------------------------------------------------------------------------
+    def _day_bounds() -> tuple[str, str]:
+        """The owner's day, as the UTC timestamps the tables hold."""
+        start = datetime.now(_zone()).replace(hour=0, minute=0, second=0, microsecond=0)
+        as_utc = lambda moment: moment.astimezone(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
+        return as_utc(start), as_utc(start + timedelta(days=1))
+
+    def _calls_today() -> list[dict]:
+        since, until = _day_bounds()
+        return sorted(
+            (c for c in db.list_calls() if c["status"] == "scheduled" and since[:16] <= c["start"][:16] < until[:16]),
+            key=lambda c: c["start"],
+        )
+
+    def _rows(items: list[tuple[str, str, str, str]], empty: str) -> str:
+        """A card's list: (link, title, line beneath, status for the dot or '')."""
+        if not items:
+            return f'<p class="quiet">{empty}</p>'
+        return '<ul class="rows">' + "".join(
+            f'<li><a href="{href}"><span class="lead">'
+            + (f'<span class="dot {escape(dot)}"></span>' if dot else "")
+            + f'<span><b>{escape(title)}</b><small>{escape(line)}</small></span></span>'
+            f'<span class="end">{ui.icon("chevron")}</span></a></li>'
+            for href, title, line, dot in items
+        ) + "</ul>"
+
+    def _kind(workflow: str) -> str:
+        return TAGS.get(workflow, (workflow, ""))[0]
+
+    @app.get("/today", response_class=HTMLResponse)
+    def today_page() -> str:
+        since, _ = _day_bounds()
+        decide = [
+            (f'/queue#d-{item["run_id"]}', item["content"].get("subject") or "Draft for your approval",
+             f'{_kind(item["workflow"])} · {item["client"]}', "waiting_for_approval")
+            for item in engine.queue()
+        ] + [
+            (f'/queue#d-{ask["run_id"]}', "Questions before drafting", f'{_kind(ask["workflow"])} · {ask["client"]}',
+             "waiting_for_input")
+            for ask in engine.input_requests()
+        ]
+        calls = [("/calendar", c["subject"] or "Call", f'{c["label"]} · with {c["sender"]}', "") for c in _calls_today()]
+        every = db.list_runs()
+        working = [
+            (f'/inspect/{r["id"]}', f'{_kind(r["workflow"])} · {r["client"]}', STATUS_WORDS.get(r["status"], r["status"]), r["status"])
+            for r in every if r["status"] in ("running", "queued")
+        ]
+        closed = [r for r in every if r["status"] in ("done", "failed") and (r["updated_at"] or r["created_at"]) >= since]
+        finished = [
+            (f'/inspect/{r["id"]}', f'{_kind(r["workflow"])} · {r["client"]}',
+             (r["error_reason"] or "failed")[:140] if r["status"] == "failed" else "done", r["status"])
+            for r in closed
+        ]
+        connected = engine.harness.mail is not None
+        now = datetime.now(_zone())
+        return render("Today", "today", f"""
+<h1>Today</h1>
+<p class="lede">{now:%A}, {now.day} {now:%B}. The decisions that wait for you, the calls in your day, and the work the agent has in hand.</p>
+{_cap_banner()}
+<div class="columns two">
+  <section class="card">
+    <div class="linkrow"><h2>Decide</h2><a href="/queue">Open Review {ui.icon("arrow")}</a></div>
+    {_rows(decide, "No item needs your decision.")}
+  </section>
+  <section class="card">
+    <div class="linkrow"><h2>Calls today</h2><a href="/calendar">All calls {ui.icon("arrow")}</a></div>
+    {"" if connected else '<p class="eyebrow">Calendar not connected</p>'}
+    {_rows(calls, "No call is scheduled for today.")}
+  </section>
+  <section class="card">
+    <div class="linkrow"><h2>In hand</h2><a href="/new">Start work {ui.icon("arrow")}</a></div>
+    {_rows(working, "The agent is working on no run at this moment.")}
+  </section>
+  <section class="card">
+    <div class="linkrow"><h2>Finished today</h2><a href="/inspect">All runs {ui.icon("arrow")}</a></div>
+    {_rows(finished, "No run has finished today.")}
+  </section>
+</div>
+""", refresh=8 if working else 0)
+
+    # --- think ------------------------------------------------------------------------
+    NO_CLIENT = "General"
+    DEPTH_WORDS = {"quick": "Quick", "considered": "Considered", "deep": "Deep"}
+
+    @app.get("/think", response_class=HTMLResponse)
+    def think_page(notice: str = "", wait: str = "") -> str:
+        names = [n for n in engine.harness.clients.list_clients() if n != NO_CLIENT]
+        options = "".join(f'<option value="{escape(n)}">{escape(n)}</option>' for n in names)
+        depths = "".join(
+            f'<option value="{depth}"{" selected" if depth == "considered" else ""}>{word}: '
+            f'{escape(settings.route_table[tier].primary) if tier in settings.route_table else "no model routed"}</option>'
+            for depth, word in DEPTH_WORDS.items() for tier in [think.DEPTHS[depth]]
+        )
+        missing = _missing_model_keys()
+        no_key = (
+            f'<p class="banner" role="status">The server has no {escape(" or ".join(missing))} yet, so a question gets '
+            'no answer. Add the key on the server, or choose another model on <a href="/cost#models">Settings and cost</a>.</p>'
+            if missing else ""
+        )
+        past = [r for r in db.list_runs() if r["workflow"] == "think"][:20]
+        cards = []
+        for r in past:
+            inputs, out = r["inputs"] or {}, r["outputs"] or {}
+            if out.get("answer"):
+                caveats = "".join(f"<li>{escape(str(c))}</li>" for c in out.get("caveats", []))
+                body = f'<pre class="say">{escape(out["answer"])}</pre>' + (
+                    f'<p class="eyebrow">Assumed or not checked</p><ul class="notes say">{caveats}</ul>' if caveats else ""
+                )
+            elif r["status"] == "failed":
+                body = f'<p class="error">{escape(r["error_reason"] or "This run failed.")}</p>'
+            elif inputs.get("question") is None:
+                body = '<p class="quiet">The retention period removed this content.</p>'
+            else:
+                body = '<p class="quiet">The agent is thinking. This page updates itself.</p>'
+            cards.append(f"""<section class="card" id="q-{r["id"]}">
+  <p class="chips"><span class="tag c-purple">{escape(DEPTH_WORDS.get(inputs.get("depth"), "Considered"))}</span>
+    <span class="tag c-slate">{escape(r["client"])}</span>
+    <span class="s-{escape(r["status"])}">{escape(STATUS_WORDS.get(r["status"], r["status"]))}</span></p>
+  <h3 class="say">{escape(str(inputs.get("question") or "Question removed"))}</h3>
+  <button type="button" class="read" hidden>Read aloud</button>
+  {body}
+  <p class="meta"><a href="/inspect/{r["id"]}">How the agent got here</a> · ${r["cost_usd"] or 0:.4f}</p>
+</section>""")
+        waiting = any(r["id"] == wait and r["status"] in ("queued", "running") for r in past)
+        return render("Think", "think", f"""
+<h1>Think</h1>
+<p class="lede">Ask a question and read the answer here. The agent reasons from your question and from the material you paste.
+ It reads no web page and no file, and it sends nothing to anyone.</p>
+{f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
+{no_key}
+<section class="card">
+  <form method="post" action="/think" class="stack">
+    <label>Your question <textarea name="question" rows="4" maxlength="8000" required></textarea></label>
+    <label>Material to reason from <span class="or">optional: paste a note, a mail, figures</span>
+      <textarea name="material" rows="4" maxlength="100000"></textarea></label>
+    <label>Depth, and the model that answers
+      <select name="depth">{depths}</select></label>
+    <label>Client <span class="or">a restricted client's question goes to approved providers alone</span>
+      <select name="client"><option value="">No client</option>{options}</select></label>
+    <button class="approve">Ask this question</button>
+  </form>
+</section>
+{"<h2>Answers</h2>" + "".join(cards) if cards else ""}
+""", script=GOAL_SCRIPT + READ_ALOUD_SCRIPT, refresh=4 if waiting else 0)
+
+    @app.post("/think")
+    async def ask(request: Request, background: BackgroundTasks):
+        form = await request.form()
+        question = str(form.get("question") or "").strip()
+        if not question:
+            return RedirectResponse(f"/think?notice={quote('Type a question first.')}", status_code=303)
+        client = str(form.get("client") or "").strip() or NO_CLIENT
+        if client != NO_CLIENT and client not in engine.harness.clients.list_clients():
+            return RedirectResponse(f"/think?notice={quote('Choose a client from the list.')}", status_code=303)
+        depth = str(form.get("depth") or "")
+        inputs = {
+            "question": question[:8000], "material": str(form.get("material") or "").replace("\r\n", "\n")[:100_000],
+            "depth": depth if depth in think.DEPTHS else "considered",
+        }
+        try:
+            run_id = engine.start_run("think", client, inputs, work=False)
+        except costs.MonthlyCapReached as e:
+            return RedirectResponse(f"/think?notice={quote(str(e))}", status_code=303)
+        background.add_task(engine.work, run_id)
+        return RedirectResponse(f"/think?wait={run_id}#q-{run_id}", status_code=303)
+
+    # --- intelligence -----------------------------------------------------------------
+    @app.get("/intelligence", response_class=HTMLResponse)
+    def intelligence_page() -> str:
+        now = datetime.now(timezone.utc)
+        # The end sits a minute ahead, so a decision made this second is inside the period.
+        since = (now - timedelta(days=30)).isoformat(timespec="seconds")
+        until = (now + timedelta(minutes=1)).isoformat(timespec="seconds")
+        report = learning.weekly_report(db, since, until)
+        total = lambda field: sum(r[field] for r in report.values())  # noqa: E731
+        decisions = total("approved") + total("sent_back") + total("rejected")
+        enquiries = [row for row in db.list_ledger() if (row["created_at"] or "") >= since]
+        by_route: dict[str, int] = {}
+        for row in enquiries:
+            by_route[row["route"] or "not routed"] = by_route.get(row["route"] or "not routed", 0) + 1
+        routes = ", ".join(f"{count} {escape(route.replace('_', ' '))}" for route, count in sorted(by_route.items())) or "none yet"
+        proposals = db.list_proposals(status="pending")
+        spend = costs.summary(db, settings)
+
+        def share(part: int, whole: int) -> str:
+            return f"{part} of {whole}" if whole else "none yet"
+
+        table = "".join(
+            f"<tr><td>{escape(_kind(name))}</td><td>{r['runs']}</td><td>{r['failed_runs']}</td><td>{r['approved']}</td>"
+            f"<td>{r['edited']}</td><td>{r['sent_back']}</td><td>{r['rejected']}</td><td>${r['cost_usd']:.2f}</td></tr>"
+            for name, r in sorted(report.items())
+        )
+        return render("Intelligence", "intelligence", f"""
+<h1>Intelligence</h1>
+<p class="lede">The last 30 days, read from the agent's own records: your decisions, the enquiries that came in, and the
+ changes the agent proposes to its working rules.</p>
+<div class="metrics">
+  <a class="metric" href="/inspect"><span class="lead"><span class="disc rose">{ui.icon("decide")}</span>
+    <span><b>{decisions}</b><span>{"Decision" if decisions == 1 else "Decisions"} you made</span>
+    <small>Approved {share(total("approved"), decisions)}, edited first {total("edited")}</small></span></span>{ui.icon("chevron")}</a>
+  <a class="metric" href="/inspect"><span class="lead"><span class="disc amber">{ui.icon("brief")}</span>
+    <span><b>{len(enquiries)}</b><span>Sponsorship {"enquiry" if len(enquiries) == 1 else "enquiries"}</span>
+    <small>{routes}</small></span></span>{ui.icon("chevron")}</a>
+  <a class="metric" href="/library"><span class="lead"><span class="disc indigo">{ui.icon("memory")}</span>
+    <span><b>{len(proposals)}</b><span>Proposed {"change" if len(proposals) == 1 else "changes"} to the rules</span>
+    <small>From the weekly review, for you to accept or decline</small></span></span>{ui.icon("chevron")}</a>
+</div>
+<div class="columns two">
+  <section class="card">
+    <div class="linkrow"><h2>By kind of work</h2><a href="/cost">Cost in full {ui.icon("arrow")}</a></div>
+    {f'<div class="tablewrap"><table><tr><th>Work</th><th>Runs</th><th>Failed</th><th>Approved</th><th>Edited</th><th>Sent back</th><th>Rejected</th><th>Cost</th></tr>{table}</table></div>'
+      if table else '<p class="quiet">No run in the last 30 days.</p>'}
+    <p class="meta">This month so far: ${spend["total_usd"]:.2f} across {plural(spend["runs"], "run")}.</p>
+  </section>
+  <section class="card">
+    <div class="linkrow"><h2>Outside signals</h2></div>
+    <p class="eyebrow">No source connected</p>
+    <p class="quiet">Reputation, regulation and market watching need a news or monitoring source. The agent has none
+     yet, so this card shows no item. It invents none.</p>
+  </section>
+</div>
+""")
 
     @app.get("/queue", response_class=HTMLResponse)
     def queue_page() -> str:

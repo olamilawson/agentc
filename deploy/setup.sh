@@ -7,6 +7,10 @@
 # else it does itself, and it is safe to run again: each step is skipped once done.
 #   ./deploy/setup.sh --new-sign-in    sets a new email and password
 #   ./deploy/setup.sh --with-code      also asks for a code from an authenticator app at sign-in
+#   ./deploy/setup.sh --key openai     asks for a provider's key (openai, anthropic, groq, openrouter),
+#                                      saves it and restarts the app. The key does not show as you paste it.
+#   ./deploy/setup.sh --local-model qwen2.5:3b
+#                                      runs an open-weight model on this server for routine steps
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -21,6 +25,50 @@ if [ ! -f .env ]; then
 fi
 if ! grep -q '^POSTGRES_PASSWORD=.\+' .env; then
   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 32)|" .env
+fi
+
+# 1b. A provider's key, pasted here and nowhere else
+set_env() {  # set_env NAME VALUE: replace the line in .env, or add it
+  if grep -q "^#\? *$1=" .env; then
+    sed -i "s|^#\? *$1=.*|$1=$2|" .env
+  else
+    echo "$1=$2" >> .env
+  fi
+}
+LOCAL_MODEL=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--key" ]; then
+    case "$arg" in
+      openai) name=OPENAI_API_KEY ;; anthropic) name=ANTHROPIC_API_KEY ;;
+      groq) name=GROQ_API_KEY ;; openrouter) name=OPENROUTER_API_KEY ;;
+      *) echo "Unknown provider '$arg'. Use openai, anthropic, groq or openrouter."; exit 1 ;;
+    esac
+    printf 'Paste your %s key and press Enter (it does not show): ' "$arg"
+    read -rs value; echo
+    value=$(printf '%s' "$value" | tr -d '[:space:]')
+    if [ -z "$value" ]; then echo "No key was pasted, so nothing changed."; exit 1; fi
+    set_env "$name" "$value"
+    unset value
+    echo "Saved the $arg key."
+  fi
+  [ "$prev" = "--local-model" ] && LOCAL_MODEL="$arg"
+  prev="$arg"
+done
+
+# 1c. An open-weight model on this server
+if [ -n "$LOCAL_MODEL" ]; then
+  free_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+  if [ "$free_mb" -lt 4500 ]; then
+    echo "This server has ${free_mb} MB of memory free. A local model needs about 4,500 MB, and the other"
+    echo "sites here share the machine, so the model was not started. Nothing changed."
+    exit 1
+  fi
+  say "Starting Ollama and fetching $LOCAL_MODEL (a few minutes)"
+  docker compose --profile local-models up -d ollama
+  docker compose --profile local-models exec ollama ollama pull "$LOCAL_MODEL"
+  set_env OLLAMA_API_BASE "http://ollama:11434"
+  echo "Fetched. Choose it for a tier on the Settings and cost screen."
 fi
 
 # 2. Build

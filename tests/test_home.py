@@ -46,7 +46,7 @@ def test_home_shows_the_waiting_item_the_client_and_the_recent_run(settings, mon
 def test_the_goal_typed_on_home_never_travels_in_the_url(settings):
     page = _client(settings).get("/").text
     assert 'id="ask-goal"' in page and 'name="goal"' not in page  # no name, so the form sends no text
-    assert "sessionStorage.getItem('goal')" in _client(settings).get("/new").text
+    assert "sessionStorage.getItem('goal')" in _client(settings).get("/think").text
 
 
 def test_review_lists_the_item_and_holds_its_sheet_with_the_three_decisions(settings):

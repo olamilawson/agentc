@@ -65,6 +65,21 @@ class ModelGateway:
                     raise
         raise AssertionError("unreachable: a route always names a primary model")
 
+    def probe(self, model: str) -> dict:
+        """One small call to a named model, to learn whether it answers from this
+        server. Returns {"ok": bool, "detail": str}; it never raises."""
+        import litellm
+
+        try:
+            response = litellm.completion(
+                model=model, messages=[{"role": "user", "content": "Reply with the one word: ready"}],
+                max_tokens=200, timeout=60,
+            )
+        except Exception as e:
+            return {"ok": False, "detail": f"{type(e).__name__}: {e}"[:600]}
+        reply = (response.choices[0].message.content or "").strip()
+        return {"ok": True, "detail": f"it replied {reply[:80]!r}" if reply else "it replied with no text"}
+
     def _call(
         self,
         model: str,
@@ -135,6 +150,9 @@ class RecordedGateway(ModelGateway):
         super().__init__(route_table={})
         self._responses = {k: list(v) for k, v in responses.items()}
         self.used_fallback = False
+
+    def probe(self, model: str) -> dict:
+        return {"ok": True, "detail": "it replied 'ready'"}
 
     def complete(
         self,

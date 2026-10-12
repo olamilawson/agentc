@@ -77,6 +77,8 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .rail a .grow { flex: 1; }
 .count { background: #e11d48; color: #fff; border-radius: 999px; min-width: 20px; height: 20px; padding: 0 6px;
   font-size: 11px; font-weight: 600; line-height: 20px; text-align: center; }
+.count.quiet-count { background: var(--rail-active); color: #e2e8f0; }
+.rail a[aria-current="page"] .quiet-count { background: #334155; }
 .rail h2 { display: flex; align-items: center; justify-content: space-between; margin: 24px 0 8px; padding: 0 12px;
   color: var(--rail-text); font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; }
 .rail h2 a { min-height: 24px; width: 24px; padding: 0; justify-content: center; }
@@ -141,7 +143,14 @@ code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .metric small { color: var(--muted); font-size: 12px; }
 .metric > svg.i { color: var(--muted); }
 .columns { display: grid; grid-template-columns: 5fr 3.5fr 3.5fr; gap: 24px; align-items: start; margin-top: 24px; }
+.columns.two { grid-template-columns: 1fr 1fr; }
 .columns .card { margin: 0; }
+.chips + h3 { margin-top: 10px; }
+form.route { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr; gap: 12px 16px; align-items: end; padding: 16px 0; margin: 0; }
+form.route + form.route { border-top: 1px solid var(--line-strong); }
+form.route label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; min-width: 0; }
+form.route select, form.route input { width: 100%; }
+form.route .actions { grid-column: 1 / -1; margin: 0; }
 .rows { margin: 0; padding: 0; list-style: none; }
 .rows li + li { border-top: 1px solid var(--line); }
 .rows a, .rows .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 12px; margin: 0 -12px;
@@ -282,7 +291,7 @@ td { font-variant-numeric: tabular-nums; }
 .signin label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
 
 /* Phone width: the rail becomes a bar across the top, and nothing scrolls sideways. */
-@media (max-width: 1100px) { .columns { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .columns, .columns.two, form.route { grid-template-columns: 1fr; } }
 @media (max-width: 860px) {
   .rail { position: static; width: auto; border-right: 0; }
   .brand { padding: 16px 16px 8px; } .brand small { display: none; }
@@ -336,6 +345,9 @@ _ICONS = {
     "x": '<path d="M6 6l12 12M18 6 6 18"/>',
     "check": '<path d="m5 12 5 5 9-10"/>',
     "note": '<path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/>',
+    "today": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    "think": '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.8.8 1.2 1.6 1.4 2.5h5.2c.2-.9.6-1.7 1.4-2.5A6 6 0 0 0 12 3z"/>',
+    "intelligence": '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     "draft": '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13 7 4 4"/>',
 }
 
@@ -358,13 +370,16 @@ def stream_badge(name: str) -> str:
 
 SCREENS = [
     ("home", "/", "Home", "home"),
-    ("queue", "/queue", "Review", "review"),
+    ("today", "/today", "Today", "today"),
+    ("think", "/think", "Think", "think"),
     ("new", "/new", "New work", "work"),
-    ("runs", "/inspect", "Runs", "runs"),
-    ("calls", "/calendar", "Calls", "calls"),
+    ("queue", "/queue", "Review", "review"),
+    ("intelligence", "/intelligence", "Intelligence", "intelligence"),
 ]
 FOOT = [
     ("library", "/library", "Memory &amp; decisions", "memory"),
+    ("runs", "/inspect", "Runs", "runs"),
+    ("calls", "/calendar", "Calls", "calls"),
     ("clients", "/files", "Clients", "folder"),
     ("cost", "/cost", "Settings and cost", "settings"),
 ]
@@ -372,13 +387,15 @@ FOOT = [
 
 def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, signed_in: bool = False,
          script: str = "", refresh: int = 0, clients: list[str] | None = None, today: str = "",
-         dock: str = "") -> str:
+         dock: str = "", today_count: int = 0) -> str:
     """One screen inside the shell. `waiting` is the number of items that need the
     owner's decision; `clients` are listed in the rail as workstreams; `dock` is
     the bar fixed to the bottom of the home screen."""
     def link(key: str, href: str, label: str, glyph: str) -> str:
         current = ' aria-current="page"' if key == active else ""
         count = f'<span class="count" aria-label="{waiting} waiting">{waiting}</span>' if key == "queue" and waiting else ""
+        if key == "today" and today_count:
+            count = f'<span class="count quiet-count" aria-label="{today_count} today">{today_count}</span>'
         return f'<a href="{href}"{current}>{icon(glyph)}<span class="grow">{label}</span>{count}</a>'
 
     streams = "".join(

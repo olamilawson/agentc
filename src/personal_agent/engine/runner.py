@@ -19,7 +19,7 @@ from sqlalchemy.engine import make_url
 
 from personal_agent import costs, tracing
 from personal_agent.clients import ClientScope, ClientStore, parse_document
-from personal_agent.config import Settings
+from personal_agent.config import Settings, TierRoute
 from personal_agent.db import Database, new_id
 from personal_agent.engine.brief_evaluation import brief_contracts, brief_outputs, build_brief_graph
 from personal_agent.engine.call_change import build_call_change_graph, call_change_contracts, call_change_outputs
@@ -32,6 +32,7 @@ from personal_agent.engine.sponsorship_triage import (
     sponsorship_outputs,
 )
 from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
+from personal_agent.engine.think import build_think_graph, think_contracts, think_outputs
 from personal_agent.graph_mail import GraphError, GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
@@ -281,6 +282,7 @@ WORKFLOWS: dict[str, Workflow] = {
     "creative-review": Workflow(build_creative_graph, creative_outputs),
     "strategy-drafting": Workflow(build_drafting_graph, drafting_outputs, revises=True),
     "call-change": Workflow(build_call_change_graph, call_change_outputs),
+    "think": Workflow(build_think_graph, think_outputs),
 }
 
 
@@ -326,6 +328,11 @@ class Engine:
                  mail: GraphMail | None = None):
         self.settings = settings
         self.db = db
+        # The owner's choices on the Settings screen replace the file's routes. The
+        # gateway reads this same table, so a later change takes effect at once.
+        for tier, route in db.model_routes().items():
+            if tier in settings.route_table:
+                settings.route_table[tier] = TierRoute(**route)
         _, skills = load_library(settings.skills_dir)
         self.harness = Harness(
             settings=settings,
@@ -333,7 +340,7 @@ class Engine:
             gateway=gateway or ModelGateway(settings.route_table),
             contracts={
                 **default_contracts(), **brief_contracts(), **sponsorship_contracts(), **creative_contracts(),
-                **drafting_contracts(), **call_change_contracts(),
+                **drafting_contracts(), **call_change_contracts(), **think_contracts(),
             },
             skill_text=skills.get("foundation-test", ""),
             skills=skills,
@@ -347,6 +354,14 @@ class Engine:
             name: wf.build(self.harness).compile(checkpointer=self.checkpointer)
             for name, wf in WORKFLOWS.items()
         }
+
+    def set_route(self, tier: str, primary: str, fallback: str | None) -> None:
+        """Route a tier to another model, from now on and across restarts."""
+        if tier not in self.settings.route_table:
+            raise ValueError(f"no tier named {tier!r}")
+        self.db.set_model_route(tier, primary, fallback)
+        self.settings.route_table[tier] = TierRoute(primary=primary, fallback=fallback)
+        self.db.audit(None, "model_route_set", {"tier": tier, "primary": primary, "fallback": fallback})
 
     def reload_library(self) -> str:
         """Read the skill library again after an accepted change; returns its version.

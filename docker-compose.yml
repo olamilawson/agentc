@@ -24,6 +24,10 @@ services:
       PERSONAL_AGENT_DATABASE_URL: postgresql+psycopg://personal_agent:${POSTGRES_PASSWORD}@postgres:5432/personal_agent
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Set by ./deploy/setup.sh --local-model once Ollama runs on this server.
+      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-}
       PERSONAL_AGENT_N8N_SECRET: ${PERSONAL_AGENT_N8N_SECRET:-}
       PERSONAL_AGENT_NAME: ${PERSONAL_AGENT_NAME:-Chidimma OS}
       PERSONAL_AGENT_OWNER_NAME: ${PERSONAL_AGENT_OWNER_NAME:-Chidimma}
@@ -56,6 +60,20 @@ services:
     ports:
       - "127.0.0.1:${API_PORT:-8100}:8000"
 
+  # Open-weight models on this server, for routine steps. Off unless asked for:
+  # ./deploy/setup.sh --local-model qwen2.5:3b starts it and fetches the model.
+  # Never published to the host, and held to a share of the machine so the other
+  # sites on this server keep theirs.
+  ollama:
+    profiles: ["local-models"]
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    networks: [internal]
+    mem_limit: 4g
+    cpus: 1.5
+
   # Caddy is for a server with nothing else on ports 80 and 443. This VPS serves
   # several domains through its own nginx, so Caddy stays off: it starts only
   # with `docker compose --profile caddy up -d`.
@@ -77,6 +95,7 @@ services:
 
 volumes:
   pgdata:
+  ollama:
   caddy_data:
   caddy_config:
 

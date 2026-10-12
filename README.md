@@ -66,10 +66,20 @@ this repository implements **Delivery phase 1: Foundation**.
   tinted icon circles, a purple accent. Home (`/`) is the dashboard: the
   greeting, "My view", three counts, priorities, calls and recent work, and a
   bar at the foot that starts work. It shows what the agent holds and invents
-  nothing. Secondary text and field edges sit one step darker than the screens
+  nothing. Today (`/today`) is the day's decisions, calls and runs. Think
+  (`/think`) answers a question at a depth you choose, with no tools and no
+  approval step, since nothing leaves. Intelligence (`/intelligence`) reads
+  the last 30 days from the agent's own records. Secondary text and field edges sit one step darker than the screens
   to meet contrast minimums; the file gives the ratios. The two typefaces
   (Newsreader and Plus Jakarta Sans, SIL Open Font License) ship in
   `api/static/fonts`; the pages call no outside host.
+- **Models** — each step belongs to a tier (cheap, standard, strong). The
+  Settings and cost screen routes each tier to a model from
+  `config/models.yaml` or to any typed id, saves the choice in the database
+  (it replaces that tier's line in `config/route_table.yaml`), and tests a
+  model with one small call. Open-weight models run on the server through
+  Ollama (`./deploy/setup.sh --local-model qwen2.5:3b`) or at a host such as
+  Groq. `./deploy/setup.sh --key openai` saves a provider's key on the server.
 - **Going live** — `deploy/go-live.md` is the checklist for ijeoma.pro on the
   Hostinger VPS. That server's own nginx holds ports 80 and 443 for several
   domains, so the app listens on `127.0.0.1:8100` and one nginx site
