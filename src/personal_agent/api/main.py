@@ -27,7 +27,7 @@ from personal_agent.api import ui
 from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
-from personal_agent import auth, costs, learning, retention, tracing
+from personal_agent import auth, connectors, costs, learning, retention, tracing
 from personal_agent.engine import think
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
@@ -1044,6 +1044,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             f"<td>{'owner approval for every call' if cls == 'release' else 'none'}</td></tr>"
             for name, cls in engine.harness.tools.registered()
         )
+        plugins = "".join(
+            f"""<tr><td><strong>{escape(c["label"])}</strong><br/><span class="meta">{escape(c["state"])}.</span></td><td>"""
+            + "<br/>".join(f"<code>{escape(name)}</code> ({cls}): {escape(does)}" for name, cls, does in c["tools"])
+            + "</td></tr>"
+            for c in connectors.status()
+        )
         mail = engine.harness.mail
         mail_line = (
             f"Mail goes through Microsoft Graph from {escape(mail.mailbox)}. <code>send_mail</code> sends a reply once you approve it."
@@ -1079,7 +1085,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <tr><td>Tool calls</td><td>{b.max_tool_calls}</td></tr>
 <tr><td>Elapsed time</td><td>{b.max_elapsed_seconds} seconds</td></tr>
 </table>
-<h2>Connected tools</h2>
+<h2 id="connectors">Connectors</h2>
+<p class="lede">Outside creative services the agent will use. Each is a shell for now: its tools exist and obey the same
+ approval rules as mail, and no workflow calls them yet.</p>
+<div class="tablewrap"><table><tr><th>Service</th><th>Tools it will offer</th></tr>{plugins}</table></div>
+<h2>Tools</h2>
 <div class="tablewrap"><table><tr><th>Tool</th><th>Class</th><th>Approval</th></tr>{tools}</table></div>
 <p class="meta">{mail_line}</p>
 <h2>Other settings</h2>

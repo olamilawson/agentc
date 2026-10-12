@@ -7,7 +7,7 @@
 # else it does itself, and it is safe to run again: each step is skipped once done.
 #   ./deploy/setup.sh --new-sign-in    sets a new email and password
 #   ./deploy/setup.sh --with-code      also asks for a code from an authenticator app at sign-in
-#   ./deploy/setup.sh --key openai     asks for a provider's key (openai, anthropic, groq, openrouter),
+#   ./deploy/setup.sh --key openai     asks for a service's key (openai, anthropic, groq, openrouter, canva, higgsfield),
 #                                      saves it and restarts the app. The key does not show as you paste it.
 #   ./deploy/setup.sh --local-model qwen2.5:3b
 #                                      runs an open-weight model on this server for routine steps
@@ -40,17 +40,20 @@ prev=""
 for arg in "$@"; do
   if [ "$prev" = "--key" ]; then
     case "$arg" in
-      openai) name=OPENAI_API_KEY ;; anthropic) name=ANTHROPIC_API_KEY ;;
-      groq) name=GROQ_API_KEY ;; openrouter) name=OPENROUTER_API_KEY ;;
-      *) echo "Unknown provider '$arg'. Use openai, anthropic, groq or openrouter."; exit 1 ;;
+      openai) names="OPENAI_API_KEY" ;; anthropic) names="ANTHROPIC_API_KEY" ;;
+      groq) names="GROQ_API_KEY" ;; openrouter) names="OPENROUTER_API_KEY" ;;
+      canva) names="CANVA_CLIENT_ID CANVA_CLIENT_SECRET" ;; higgsfield) names="HIGGSFIELD_API_KEY" ;;
+      *) echo "Unknown service '$arg'. Use openai, anthropic, groq, openrouter, canva or higgsfield."; exit 1 ;;
     esac
-    printf 'Paste your %s key and press Enter (it does not show): ' "$arg"
-    read -rs value; echo
-    value=$(printf '%s' "$value" | tr -d '[:space:]')
-    if [ -z "$value" ]; then echo "No key was pasted, so nothing changed."; exit 1; fi
-    set_env "$name" "$value"
-    unset value
-    echo "Saved the $arg key."
+    for name in $names; do
+      printf 'Paste the %s value %s and press Enter (it does not show): ' "$arg" "$name"
+      read -rs value; echo
+      value=$(printf '%s' "$value" | tr -d '[:space:]')
+      if [ -z "$value" ]; then echo "Nothing was pasted for $name, so it was not changed."; exit 1; fi
+      set_env "$name" "$value"
+      unset value
+    done
+    echo "Saved for $arg."
   fi
   [ "$prev" = "--local-model" ] && LOCAL_MODEL="$arg"
   prev="$arg"

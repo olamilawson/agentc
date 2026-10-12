@@ -19,6 +19,7 @@ from sqlalchemy.engine import make_url
 
 from personal_agent import costs, tracing
 from personal_agent.clients import ClientScope, ClientStore, parse_document
+from personal_agent import connectors
 from personal_agent.config import Settings, TierRoute
 from personal_agent.db import Database, new_id
 from personal_agent.engine.brief_evaluation import brief_contracts, brief_outputs, build_brief_graph
@@ -114,6 +115,8 @@ class Harness:
         self.tools.register(ToolSpec(name="cancel_calendar_event", cls=ToolClass.RELEASE, fn=self._cancel_event))
         # Read-class: when the owner's calendar is busy. Free and busy times only.
         self.tools.register(ToolSpec(name="read_calendar", cls=ToolClass.READ, fn=self._read_calendar))
+        # Canva and Higgsfield: shells that name their tools and refuse every call for now.
+        connectors.register(self.tools, self.db, self.settings)
         # Draft-class: a document in the run's own client folder (reversible).
         self.tools.register(
             ToolSpec(

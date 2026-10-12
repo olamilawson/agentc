@@ -26,6 +26,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Connectors (src/personal_agent/connectors.py). Empty: not connected.
+      CANVA_CLIENT_ID: ${CANVA_CLIENT_ID:-}
+      CANVA_CLIENT_SECRET: ${CANVA_CLIENT_SECRET:-}
+      HIGGSFIELD_API_KEY: ${HIGGSFIELD_API_KEY:-}
       # Set by ./deploy/setup.sh --local-model once Ollama runs on this server.
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-}
       PERSONAL_AGENT_N8N_SECRET: ${PERSONAL_AGENT_N8N_SECRET:-}
