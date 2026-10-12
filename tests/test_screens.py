@@ -119,3 +119,17 @@ def test_a_typed_model_id_is_checked_and_a_test_reports_the_reply(settings):
     assert "now uses groq/llama-3.3-70b-versatile" in client.get(typed.headers["location"]).text
     tested = client.post("/models/test", data={"tier": "cheap", "primary": "openai/gpt-5"})
     assert "openai/gpt-5 answered: it replied" in client.get(tested.headers["location"]).text
+
+
+# --- scheduled jobs ---------------------------------------------------------------------
+def test_settings_shows_each_scheduled_job_and_its_last_result(settings):
+    client = _client(settings)
+    assert client.get("/cost").text.count("Has not run yet") == 3
+    jobs_dir = settings.clients_dir.parent / "jobs"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "backup.status").write_text("time=2026-10-12T02:15:04Z\nok=yes\ndetail=backup 2026-10-12-0215: 1.2M, 3 kept on this server\n")
+    (jobs_dir / "learning.status").write_text("time=2026-10-12T06:00:09Z\nok=no\ndetail=learning review not started: a=b <cap>\n")
+    page = client.get("/cost").text
+    assert '<span class="s-done">worked</span> 2026-10-12 02:15:04 UTC' in page and "3 kept on this server" in page
+    assert '<span class="s-failed">failed</span>' in page and "a=b &lt;cap&gt;" in page
+    assert page.count("Has not run yet") == 1

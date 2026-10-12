@@ -27,7 +27,7 @@ from personal_agent.api import ui
 from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
-from personal_agent import auth, connectors, costs, learning, retention, tracing
+from personal_agent import auth, connectors, costs, jobs, learning, retention, tracing
 from personal_agent.engine import think
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
@@ -1050,6 +1050,16 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             + "</td></tr>"
             for c in connectors.status()
         )
+        def job_line(last: dict | None) -> str:
+            if last is None:
+                return "Has not run yet"
+            word = '<span class="s-done">worked</span>' if last["ok"] else '<span class="s-failed">failed</span>'
+            return f'{word} {escape(last["time"].replace("T", " ").replace("Z", " UTC"))}<br/><span class="meta">{escape(last["detail"])}</span>'
+
+        scheduled = "".join(
+            f"<tr><td>{escape(j['label'])}</td><td>{escape(j['schedule'])}</td><td>{job_line(j['last'])}</td></tr>"
+            for j in jobs.last_runs(settings.clients_dir.parent / "jobs")
+        )
         mail = engine.harness.mail
         mail_line = (
             f"Mail goes through Microsoft Graph from {escape(mail.mailbox)}. <code>send_mail</code> sends a reply once you approve it."
@@ -1085,6 +1095,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <tr><td>Tool calls</td><td>{b.max_tool_calls}</td></tr>
 <tr><td>Elapsed time</td><td>{b.max_elapsed_seconds} seconds</td></tr>
 </table>
+<h2 id="jobs">Scheduled jobs</h2>
+<div class="tablewrap"><table><tr><th>Job</th><th>Server time (UTC)</th><th>Last run</th></tr>{scheduled}</table></div>
+<p class="meta">The server runs these by itself. Backups stay on the server for 14 days; a copy off the server needs a
+ destination and a key (<code>deploy/backup.sh</code>).</p>
 <h2 id="connectors">Connectors</h2>
 <p class="lede">Outside creative services the agent will use. Each is a shell for now: its tools exist and obey the same
  approval rules as mail, and no workflow calls them yet.</p>

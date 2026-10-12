@@ -141,18 +141,15 @@ Confirm:
 
 ## 10. Schedule the three jobs
 
-```bash
-sudo crontab -e
-```
+`deploy/setup.sh` does this: it writes `/etc/cron.d/personal-agent` (the daily
+backup at 02:15, the retention job at 02:45, the learning review on Mondays at
+06:00, server time) and takes a first backup. Each job runs through
+`deploy/jobs.sh`, which logs to `/var/log/personal-agent/jobs.log` and records
+the result for the Settings and cost screen.
 
-```
-15 2 * * *  /opt/personal-agent/deploy/backup.sh
-30 2 * * *  cd /opt/personal-agent && docker compose exec -T api python -m personal_agent.retention
-0  6 * * 1  cd /opt/personal-agent && docker compose exec -T api python -m personal_agent.learning
-```
-
-`backup.sh` needs your age public key and an off-server destination first;
-read the top of the script.
+Backups stay in `/var/backups/personal-agent` for 14 days. For a copy off the
+server, set `BACKUP_DEST` and `AGE_PUBKEY` in `.env`; read the top of
+`deploy/backup.sh`. Restoring is by hand for now.
 
 ## Known limits on the first day
 

@@ -144,7 +144,24 @@ if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
   certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN" --redirect
 fi
 
-# 6. Done
+# 6. The three scheduled jobs. One file of this app's own; no other site's schedule is touched.
+if [ -d /etc/cron.d ]; then
+  HERE=$(pwd)
+  cat > /etc/cron.d/personal-agent <<CRON
+# Written by $HERE/deploy/setup.sh. Times are the server's.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+15 2 * * * root $HERE/deploy/jobs.sh backup >/dev/null 2>&1
+45 2 * * * root $HERE/deploy/jobs.sh retention >/dev/null 2>&1
+0 6 * * 1 root $HERE/deploy/jobs.sh learning >/dev/null 2>&1
+CRON
+  chmod 644 /etc/cron.d/personal-agent
+  say "Scheduled the daily backup, the daily retention job and the weekly review. Taking a first backup now"
+  ./deploy/jobs.sh backup || echo "The first backup did not work. The site is still running; send the line above for help."
+else
+  echo "This server has no /etc/cron.d, so the backup and the other jobs were not scheduled."
+fi
+
+# 7. Done
 say "Checking"
 curl -fsS "https://$DOMAIN/health" && echo
 echo
