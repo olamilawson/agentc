@@ -108,7 +108,7 @@ def test_the_owner_routes_a_tier_to_another_model_and_the_choice_survives_a_rest
     assert Database(settings.database_url).model_routes()["cheap"]["fallback"] == "openai/gpt-5"
 
 
-def test_a_typed_model_id_is_checked_and_a_test_reports_the_reply(settings):
+def test_a_typed_model_id_is_checked_and_a_test_reports_the_reply(settings, monkeypatch):
     _tiers(settings)
     client = _client(settings)
     bad = client.post("/models/route", data={"tier": "cheap", "primary_other": "not a model"})
@@ -117,8 +117,36 @@ def test_a_typed_model_id_is_checked_and_a_test_reports_the_reply(settings):
     assert client.post("/models/route", data={"tier": "nope", "primary": "openai/gpt-5"}).status_code == 400
     typed = client.post("/models/route", data={"tier": "cheap", "primary": "openai/gpt-5", "primary_other": "groq/llama-3.3-70b-versatile"})
     assert "now uses groq/llama-3.3-70b-versatile" in client.get(typed.headers["location"]).text
-    tested = client.post("/models/test", data={"tier": "cheap", "primary": "openai/gpt-5"})
-    assert "openai/gpt-5 answered: it replied" in client.get(tested.headers["location"]).text
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
+    tested = client.post("/models/test", data={"tier": "standard", "primary": "openai/gpt-5-mini"})
+    page = client.get(tested.headers["location"]).text
+    assert "openai/gpt-5-mini answered: it replied" in page and "Press Use for standard" in page
+    assert "Nothing was saved" not in page and settings.route_table["standard"].primary == "openai/gpt-5"
+
+
+def test_a_tested_model_stays_chosen_and_a_refusal_is_put_plainly(settings, monkeypatch):
+    _tiers(settings)
+    settings.model_catalogue.append(ModelChoice(id="openai/gpt-5-mini", label="GPT-5 mini", key="OPENAI_API_KEY"))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    app = create_app(settings, gateway=RecordedGateway({}))
+    client = TestClient(app, follow_redirects=False)
+
+    # A model whose setting is missing is not called at all.
+    local = client.post("/models/test", data={"tier": "cheap", "primary": "ollama_chat/qwen2.5:3b"})
+    page = client.get(local.headers["location"]).text
+    assert "was not called: the server has no OLLAMA_API_BASE" in page and "--local-model qwen2.5:3b" in page
+    assert '<option value="ollama_chat/qwen2.5:3b" selected>' in page  # still chosen in the cheap row
+    assert "Nothing was saved: the cheap tier still uses openai/gpt-5-mini." in page
+
+    # The provider refuses: the reason and the next step, in plain words.
+    gateway = app.state.engine.harness.gateway
+    gateway.probe = lambda model: {"ok": False, "detail": "RateLimitError: OpenAIException - You have no credits remaining."}
+    refused = client.post("/models/test", data={"tier": "standard", "primary": "openai/gpt-5-mini"})
+    page = client.get(refused.headers["location"]).text
+    assert "has no API credit" in page and 'class="banner stop"' in page
+    assert page.count('<option value="openai/gpt-5-mini" selected>') == 2  # cheap's own, and standard's tested one
+    assert "the standard tier still uses openai/gpt-5." in page
 
 
 # --- scheduled jobs ---------------------------------------------------------------------

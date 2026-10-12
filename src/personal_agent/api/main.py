@@ -200,6 +200,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     engine = Engine(settings, db, gateway=gateway, mail=mail)
 
     app = FastAPI(title="Personal Agent", version="0.1.0 (foundation)")
+    app.state.engine = engine
 
     # --- sign-in ----------------------------------------------------------------------
     # With the owner's email, password hash and session secret set, every route needs a session except the
@@ -940,7 +941,20 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         name = known or KEY_NAMES.get(model.split("/", 1)[0].lower())
         return name if name and not os.environ.get(name) else None
 
-    def _models_section(notice: str = "") -> str:
+    def _why_no_answer(model: str, detail: str) -> str:
+        """A provider's refusal in the owner's terms, with the next step."""
+        provider, low = model.split("/", 1)[0], detail.lower()
+        if "no credits" in low or "insufficient_quota" in low or "exceeded your current quota" in low or "billing" in low:
+            return (f"{provider} turned the call down: the account this key belongs to has no API credit. "
+                    "Add credit in that provider's billing page, wait a few minutes, and test again. "
+                    "A chat subscription is separate from API credit.")
+        if "authentication" in low or "invalid_api_key" in low or "incorrect api key" in low or "invalid x-api-key" in low:
+            return f"{provider} did not accept the key on the server. Save it again with ./deploy/setup.sh --key {provider}"
+        if "notfound" in low or "does not exist" in low or "model_not_found" in low or "not_found" in low:
+            return f"{provider} has no model by that name, or this account may not use it. Choose another model."
+        return detail
+
+    def _models_section(notice: str = "", tested: str = "", tested_tier: str = "", bad: bool = False) -> str:
         def options(current: str | None, none: bool = False) -> str:
             out = ['<option value="">None</option>'] if none else []
             listed = False
@@ -962,7 +976,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
   <input type="hidden" name="tier" value="{escape(tier)}"/>
   <div><h3>{escape(tier.capitalize())}</h3><p class="meta">{uses.get(tier, "")}</p>
     <p class="meta">Now: <code>{escape(route.primary)}</code>{f" · needs {_key_for(route.primary)}" if _key_for(route.primary) else ""}</p></div>
-  <label>Model <select name="primary">{options(route.primary)}</select></label>
+  <label>Model <select name="primary">{options(tested if tier == tested_tier and MODEL_ID.fullmatch(tested) else route.primary)}</select></label>
   <label>or another model's id <input type="text" name="primary_other" placeholder="provider/model" maxlength="130" autocomplete="off"/></label>
   <label>If that provider fails <select name="fallback">{options(route.fallback, none=True)}</select></label>
   <span class="actions"><button class="approve">Use for {escape(tier)}</button>
@@ -973,7 +987,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return f"""<h2 id="models">Models</h2>
 <p class="lede">Each step of the agent's work belongs to one of these tiers. Choose the model each tier uses. Test a model
  before you rely on it: the test makes one small call and reports the reply.</p>
-{f'<div class="banner" role="status">{escape(notice)}</div>' if notice else ""}
+{f'<div class="banner{" stop" if bad else ""}" role="status">{escape(notice)}</div>' if notice else ""}
 <section class="card">{forms}</section>"""
 
     def _chosen_model(form) -> str:
@@ -1005,17 +1019,34 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 
     @app.post("/models/test")
     async def test_model(request: Request):
-        model = _chosen_model(await request.form())
+        form = await request.form()
+        model, tier = _chosen_model(form), str(form.get("tier") or "")
         if not MODEL_ID.fullmatch(model):
             return _models_notice("Choose a model to test, or type its id as provider/model.")
+        now = settings.route_table[tier].primary if tier in settings.route_table else ""
+        saved = "" if model == now or not now else f" Nothing was saved: the {tier} tier still uses {now}."
+
+        def report(text: str, bad: bool):
+            # The tested model stays chosen in its row, so the next press acts on it.
+            return RedirectResponse(
+                f"/cost?notice={quote(text)}&tested={quote(model, safe='')}&tier={quote(tier)}{'&bad=1' if bad else ''}#models",
+                status_code=303,
+            )
+
+        lacks = _key_for(model)
+        if lacks:
+            how = {"OLLAMA_API_BASE": "./deploy/setup.sh --local-model " + model.split("/", 1)[1]}.get(
+                lacks, "./deploy/setup.sh --key " + model.split("/", 1)[0])
+            return report(f"{model} was not called: the server has no {lacks}. Add it on the server with {how}.{saved}", True)
         result = engine.harness.gateway.probe(model)
         db.audit(None, "model_tested", {"model": model, "ok": result["ok"]})
-        return _models_notice(
-            f"{model} answered: {result['detail']}." if result["ok"] else f"{model} did not answer. {result['detail']}"
-        )
+        if result["ok"]:
+            press = f" Press Use for {tier} to route the tier to it." if saved else ""
+            return report(f"{model} answered: {result['detail']}.{press}", False)
+        return report(f"{model} did not answer. {_why_no_answer(model, result['detail'])}{saved}", True)
 
     @app.get("/cost", response_class=HTMLResponse)
-    def cost_page(month: str | None = None, notice: str = "") -> str:
+    def cost_page(month: str | None = None, notice: str = "", tested: str = "", tier: str = "", bad: str = "") -> str:
         try:
             s = costs.summary(db, settings, month)
         except ValueError as e:
@@ -1091,7 +1122,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <p>{cap_line}</p>
 {table("By workflow", s["by_workflow"])}
 {table("By client", s["by_client"])}
-{_models_section(notice)}
+{_models_section(notice, tested, tier, bool(bad))}
 <h2>Ceilings for each run</h2>
 <table>
 <tr><td>Cost</td><td>${b.max_cost_usd:.2f}</td></tr>
