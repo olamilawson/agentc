@@ -65,6 +65,9 @@ class Settings(BaseModel):
     route_table: dict[str, TierRoute]
     budgets: Budgets
     skills_dir: Path
+    # On the server: where the skill files ship, inside the image. The library the agent
+    # reads (skills_dir) then lives in the data folder and is kept across deploys (skills/sync.py).
+    shipped_skills_dir: Path | None = None
     clients_dir: Path
     # None: no policy is configured and every sponsorship enquiry escalates.
     sponsorship: SponsorshipPolicy | None = None
@@ -154,6 +157,7 @@ def load_settings() -> Settings:
         route_table=routes,
         budgets=budgets,
         skills_dir=Path(os.environ.get("PERSONAL_AGENT_SKILLS_DIR", str(REPO_ROOT / "skills"))),
+        shipped_skills_dir=Path(env("PERSONAL_AGENT_SHIPPED_SKILLS_DIR")) if env("PERSONAL_AGENT_SHIPPED_SKILLS_DIR") else None,
         clients_dir=Path(
             os.environ.get("PERSONAL_AGENT_CLIENTS_DIR", str(REPO_ROOT / "data" / "clients"))
         ),

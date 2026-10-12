@@ -42,6 +42,7 @@ from personal_agent.harness.models import ModelGateway
 from personal_agent.harness.runner import NodeRunner
 from personal_agent.rendering import Page, render_file
 from personal_agent.skills.loader import load_library
+from personal_agent.skills.sync import sync_library
 
 PENDING_STATUSES = {"waiting_for_approval", "waiting_for_input"}
 
@@ -336,6 +337,13 @@ class Engine:
         for tier, route in db.model_routes().items():
             if tier in settings.route_table:
                 settings.route_table[tier] = TierRoute(**route)
+        # On the server the library lives outside the image: bring in what shipped,
+        # keeping every file the owner has changed.
+        self.library_sync: dict[str, list[str]] = {}
+        if settings.shipped_skills_dir and settings.shipped_skills_dir != settings.skills_dir:
+            self.library_sync = sync_library(settings.shipped_skills_dir, settings.skills_dir)
+            if any(self.library_sync.values()):
+                db.audit(None, "skill_library_synced", self.library_sync)
         _, skills = load_library(settings.skills_dir)
         self.harness = Harness(
             settings=settings,

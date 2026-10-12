@@ -8,6 +8,8 @@ RUN uv venv && uv pip install --system . "langgraph-checkpoint-postgres>=2.0" "p
 # The package is installed into site-packages, so config.py's REPO_ROOT does not
 # point at /app here: every path it would derive from REPO_ROOT is set explicitly.
 COPY config ./config
+# The skill files as they ship. The library the agent reads is in the data folder,
+# outside the image, so the owner's accepted changes outlast a deploy (skills/sync.py).
 COPY skills ./skills
 ENV PERSONAL_AGENT_ROUTE_TABLE=/app/config/route_table.yaml \
     PERSONAL_AGENT_BUDGETS=/app/config/budgets.yaml \
@@ -16,7 +18,8 @@ ENV PERSONAL_AGENT_ROUTE_TABLE=/app/config/route_table.yaml \
     PERSONAL_AGENT_PROVIDERS=/app/config/providers.yaml \
     PERSONAL_AGENT_CALENDAR=/app/config/calendar.yaml \
     PERSONAL_AGENT_MODELS=/app/config/models.yaml \
-    PERSONAL_AGENT_SKILLS_DIR=/app/skills \
+    PERSONAL_AGENT_SHIPPED_SKILLS_DIR=/app/skills \
+    PERSONAL_AGENT_SKILLS_DIR=/app/data/skills \
     PERSONAL_AGENT_CLIENTS_DIR=/app/data/clients \
     PERSONAL_AGENT_CHECKPOINT_DB=/app/data/checkpoints.sqlite
 

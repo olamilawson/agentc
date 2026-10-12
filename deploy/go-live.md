@@ -156,10 +156,10 @@ server, set `BACKUP_DEST` and `AGE_PUBKEY` in `.env`; read the top of
 - **Mail has no connection until you set it up.** The agent holds approved
   sponsorship replies in a local outbox and sends none. `deploy/microsoft-graph.md`
   has the steps; a tenant administrator does the first four.
-- **Accepted skill changes do not persist.** The image carries the skill files,
-  so a change you accept on the Memory & decisions screen disappears at the next
-  deploy. Until the server mounts `skills/` from a git checkout, make skill
-  changes in the repository.
+- **Accepted skill changes persist.** The rules the agent reads live in
+  `data/skills`, outside the image, and the daily backup includes them. A deploy
+  brings in a shipped update to any skill you have not changed; where you have,
+  yours stays and the Memory & decisions screen asks which to keep.
 - **The mail watcher is off** until you set `PERSONAL_AGENT_N8N_SECRET` and
   build the n8n workflow that posts to `/hooks/n8n/sponsorship`.
 - **No live model run has happened yet.** Run one brief through the agent and

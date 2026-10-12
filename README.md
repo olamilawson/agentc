@@ -170,7 +170,12 @@ this repository implements **Delivery phase 1: Foundation**.
   and reported as not sent. The criteria and thresholds are provisional. See
   `docs/adr/0004-sponsorship-triage.md`.
 - **Skill library** — versioned `skills/*/SKILL.md` files; every run records
-  the library version it used; the agent never edits them.
+  the library version it used; the agent never edits them. On the server the
+  library the agent reads lives in `data/skills`, outside the image, so a
+  change the owner accepts outlasts a deploy. At each start
+  `skills/sync.py` brings in shipped updates to skills the owner has not
+  changed; where both changed, the owner's text stays and the Memory &
+  decisions screen asks which to keep.
 - **Client folders** — one directory per client; runs carry an immutable client
   scope; file intake (`POST /clients/{name}/files`), PDF/Word/text parsing and
   keyword retrieval are read-class tools whose payloads are checked against the

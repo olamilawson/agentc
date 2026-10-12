@@ -31,6 +31,7 @@ from personal_agent import auth, connectors, costs, jobs, learning, retention, t
 from personal_agent.engine import think
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
+from personal_agent.skills import sync as skill_sync
 from personal_agent.engine.sponsorship_triage import CLIENT as SPONSORSHIP_CLIENT
 from personal_agent.harness.models import ModelGateway
 
@@ -473,11 +474,14 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             raise HTTPException(404, "run not found")
         return run
 
-    def _back_to_review(request: Request):
-        """A browser that posted a sheet's form goes back to Review; an API client gets the result."""
+    def _back_to(request: Request, path: str):
+        """A browser that posted a form goes back to its screen; an API client gets the result."""
         if "text/html" in request.headers.get("accept", ""):
-            return RedirectResponse("/queue", status_code=303)
+            return RedirectResponse(path, status_code=303)
         return None
+
+    def _back_to_review(request: Request):
+        return _back_to(request, "/queue")
 
     @app.get("/approvals/pending")
     def pending() -> list[dict]:
@@ -1131,6 +1135,18 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             diff = f"(no longer applies: {e})"
         return {**proposal, "diff": diff}
 
+    @app.post("/skills/{skill}/shipped")
+    async def resolve_shipped_skill(skill: str, request: Request):
+        """A skill the owner changed, whose shipped text has changed too: keep theirs, or take the shipped one."""
+        shipped = settings.shipped_skills_dir
+        if not shipped or skill not in {d["skill"] for d in skill_sync.diverged(shipped, settings.skills_dir)}:
+            raise HTTPException(404, "no shipped update waits for that skill")
+        take = (await _fields(request)).get("choice") == "shipped"
+        skill_sync.resolve(shipped, settings.skills_dir, skill, take_shipped=take)
+        version = engine.reload_library()
+        db.audit(None, "skill_shipped_update_decided", {"skill": skill, "took_shipped": take, "library_version": version})
+        return _back_to(request, "/library") or {"skill": skill, "took_shipped": take, "library_version": version}
+
     @app.get("/skills")
     def skills() -> dict:
         version, library = load_library(settings.skills_dir)
@@ -1187,6 +1203,22 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 </section>"""
             )
         pending = "".join(cards) or "<p>No proposal waits for your decision.</p>"
+        updates = "".join(
+            f"""<section class="card">
+  <h2>{escape(d["skill"])}</h2>
+  <p>An update to the app changed these rules, and you have changed them too. The agent kept yours.
+   The lines below show what the update changes in the rules as they first shipped.</p>
+  <pre>{escape(learning._diff(d["baseline"], d["shipped"]))}</pre>
+  <div class="actions">
+    <form method="post" action="/skills/{escape(d["skill"])}/shipped">
+      <input type="hidden" name="choice" value="mine"/><button class="approve">Keep my rules</button></form>
+    <form method="post" action="/skills/{escape(d["skill"])}/shipped">
+      <input type="hidden" name="choice" value="shipped"/><button class="reject">Replace mine with the update</button></form>
+  </div>
+</section>"""
+            for d in (skill_sync.diverged(settings.shipped_skills_dir, settings.skills_dir) if settings.shipped_skills_dir else [])
+        )
+        updates = f"<h2>Updates that met your changes</h2>{updates}" if updates else ""
         latest = next((r for r in db.list_runs() if r["workflow"] == learning.WORKFLOW and r["outputs"]), None)
         report = ""
         if latest:
@@ -1209,9 +1241,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return render("Memory & decisions", "library", f"""
 <h1>Memory &amp; decisions</h1>
 <p class="lede">The agent cannot edit these files. The learning review proposes a change here, and it takes
- effect once you accept it.</p>
+ effect once you accept it. An accepted change stays through every update to the app.</p>
 <p class="meta">library version <code>{version[:12]}</code></p>
 <form method="post" action="/learning/reviews"><button>Run a learning review now</button></form>
+{updates}
 <h2>Proposed changes</h2>
 {pending}
 {report}
