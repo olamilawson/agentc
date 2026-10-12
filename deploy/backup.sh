@@ -24,7 +24,7 @@ KEEP=$(setting BACKUP_KEEP_DAYS); KEEP=${KEEP:-14}
 DEST=$(setting BACKUP_DEST)
 AGE_PUBKEY=$(setting AGE_PUBKEY)
 
-STAMP=$(date +%F-%H%M)
+STAMP=$(date +%F-%H%M%S)  # to the second: a restore's own backup never lands on the archive it restores
 FILE="$DIR/backup-$STAMP.tar.gz"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT

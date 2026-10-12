@@ -1102,7 +1102,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <h2 id="jobs">Scheduled jobs</h2>
 <div class="tablewrap"><table><tr><th>Job</th><th>Server time (UTC)</th><th>Last run</th></tr>{scheduled}</table></div>
 <p class="meta">The server runs these by itself. Backups stay on the server for 14 days; a copy off the server needs a
- destination and a key (<code>deploy/backup.sh</code>).</p>
+ destination and a key (<code>deploy/backup.sh</code>). <code>./deploy/restore.sh</code> on the server returns the agent to a backup.</p>
 <h2 id="connectors">Connectors</h2>
 <p class="lede">Outside creative services the agent will use. Each is a shell for now: its tools exist and obey the same
  approval rules as mail, and no workflow calls them yet.</p>

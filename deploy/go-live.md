@@ -149,7 +149,12 @@ the result for the Settings and cost screen.
 
 Backups stay in `/var/backups/personal-agent` for 14 days. For a copy off the
 server, set `BACKUP_DEST` and `AGE_PUBKEY` in `.env`; read the top of
-`deploy/backup.sh`. Restoring is by hand for now.
+`deploy/backup.sh`.
+
+To go back to a backup, run `./deploy/restore.sh`. It lists the backups, asks
+before it changes anything, backs up the present state first, and sets the
+present client folders aside instead of deleting them. `.env` is in no backup
+and is not touched.
 
 ## Known limits on the first day
 

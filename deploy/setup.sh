@@ -9,6 +9,7 @@
 #   ./deploy/setup.sh --with-code      also asks for a code from an authenticator app at sign-in
 #   ./deploy/setup.sh --key openai     asks for a service's key (openai, anthropic, groq, openrouter, canva, higgsfield),
 #                                      saves it and restarts the app. The key does not show as you paste it.
+#   ./deploy/restore.sh                returns the agent to one of its backups (a separate command)
 #   ./deploy/setup.sh --local-model qwen2.5:3b
 #                                      runs an open-weight model on this server for routine steps
 set -euo pipefail
