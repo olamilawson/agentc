@@ -99,12 +99,16 @@ button:hover { background: var(--subtle); }
 .approve:hover { background: #1E293B; }
 .reject { border-color: var(--bad); color: var(--bad); }
 .read { min-height: 44px; font-size: 13px; margin: 8px 0; }
-input[type="text"], input[type="email"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea { min-height: 44px; padding: 8px 12px;
+select, input[type="text"], input[type="email"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea { min-height: 44px; padding: 8px 12px;
   border: 1px solid var(--edge); border-radius: 12px; background: var(--card); color: var(--ink); font: 14px var(--sans); }
 textarea { width: 100%; line-height: 1.5; }
+input[type="file"] { min-height: 44px; padding: 10px 0; font: 14px var(--sans); max-width: 100%; }
 label { color: var(--ink); }
 form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
-form.edit, form.stack { flex-direction: column; align-items: stretch; }
+form.edit, form.stack { flex-direction: column; align-items: stretch; gap: 16px; }
+form.stack label { display: flex; flex-direction: column; gap: 6px; font-weight: 500; }
+form.stack button { align-self: flex-start; }
+.or { color: var(--muted); font-size: 12px; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 16px; }
 .actions form { margin: 0; }
 details { margin: 8px 0; }
@@ -155,6 +159,7 @@ td { font-variant-numeric: tabular-nums; }
 
 SCREENS = [
     ("queue", "/queue", "Approval queue"),
+    ("new", "/new", "New work"),
     ("runs", "/inspect", "Runs"),
     ("calls", "/calendar", "Calls"),
     ("clients", "/files", "Clients"),
@@ -164,7 +169,7 @@ SCREENS = [
 
 
 def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, signed_in: bool = False,
-         script: str = "") -> str:
+         script: str = "", refresh: int = 0) -> str:
     """One screen inside the shell. `waiting` is the number of items that need
     the owner's decision; it shows beside the queue link on every screen."""
     links = []
@@ -179,6 +184,7 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="robots" content="noindex, nofollow"/>
+{f'<meta http-equiv="refresh" content="{refresh}"/>' if refresh else ""}
 <title>{escape(title)} · {escape(brand)}</title>
 <style>{CSS}</style></head>
 <body>

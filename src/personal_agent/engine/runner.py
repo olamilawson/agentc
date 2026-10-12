@@ -380,9 +380,10 @@ class Engine:
         if cap["state"] in ("alert", "stopped") and not self.db.audited_since("monthly_cap_alert", month_start):
             self.db.audit(None, "monthly_cap_alert", {"cap_usd": cap["cap_usd"], "used": cap["used"]})
 
-    def start_run(self, workflow: str, client: str, inputs: dict, by_hand: bool = True) -> str:
+    def start_run(self, workflow: str, client: str, inputs: dict, by_hand: bool = True, work: bool = True) -> str:
         """by_hand: the owner started it. A run a watcher or a schedule starts
-        is refused once the month's spend reaches the cap."""
+        is refused once the month's spend reaches the cap. work=False records
+        the run and returns at once; the caller then calls work(run_id)."""
         if workflow not in WORKFLOWS:
             raise UnknownWorkflow(f"unknown workflow {workflow!r}; known: {', '.join(WORKFLOWS)}")
         self.check_monthly_cap(by_hand, f"a {workflow} run")
@@ -392,8 +393,14 @@ class Engine:
         version, _ = load_library(self.settings.skills_dir)
         self.db.create_run(run_id, workflow, client, inputs, version)
         self.db.audit(run_id, "run_created", {"workflow": workflow, "client": client})
-        self._invoke(run_id, None, {"run_id": run_id, "client": client, "inputs": inputs})
+        if work:
+            self.work(run_id)
         return run_id
+
+    def work(self, run_id: str) -> None:
+        """Run a created run until it finishes, fails or stops for the owner."""
+        run = self.db.get_run(run_id)
+        self._invoke(run_id, None, {"run_id": run_id, "client": run["client"], "inputs": run["inputs"]})
 
     def approve(self, run_id: str, decision: str, comment: str | None, edited_body: str | None = None) -> dict:
         run = self.db.get_run(run_id)

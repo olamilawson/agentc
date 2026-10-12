@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -216,11 +217,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         response.delete_cookie(auth.SESSION_COOKIE, path="/")
         return response
 
-    def render(title: str, active: str, body: str, script: str = "") -> str:
+    def render(title: str, active: str, body: str, script: str = "", refresh: int = 0) -> str:
         waiting = len(db.list_runs(status="waiting_for_approval")) + len(db.list_runs(status="waiting_for_input"))
         return ui.page(
             title, active, body, brand=settings.brand_name, waiting=waiting,
-            signed_in=guard is not None, script=script,
+            signed_in=guard is not None, script=script, refresh=refresh,
         )
 
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -580,6 +581,147 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 {"".join(cards) or "<p>No client has a folder yet. Create one with <code>POST /clients</code>.</p>"}
 """)
 
+    # --- new work ---------------------------------------------------------------------
+    KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY"}
+
+    def _missing_model_keys() -> list[str]:
+        """Names of the provider keys the route table needs and the server lacks."""
+        needed = {KEY_NAMES.get(route.primary.split("/", 1)[0].lower()) for route in settings.route_table.values()}
+        return sorted(name for name in needed if name and not os.environ.get(name))
+
+    @app.get("/new", response_class=HTMLResponse)
+    def new_work_page(notice: str = "") -> str:
+        names = engine.harness.clients.list_clients()
+        options = "".join(f'<option value="{escape(n)}">{escape(n)}</option>' for n in names)
+        client_fields = f"""
+            <label>Client
+              <select name="client_existing"><option value="">Choose a client</option>{options}</select></label>
+            <label><span class="or">or a new client's name</span>
+              <input type="text" name="client_new" maxlength="80" autocomplete="off"/></label>"""
+        missing = _missing_model_keys()
+        no_key = (
+            f'<p class="banner" role="status">The server has no {escape(" or ".join(missing))} yet, so a run stops at '
+            "its first model step. Add the key to <code>.env</code> on the server and restart.</p>" if missing else ""
+        )
+        return render("New work", "new", f"""
+<h1>New work</h1>
+<p class="lede">Give the agent a piece of work. It prepares a draft and puts it in your approval queue.
+ Sponsorship enquiries arrive by mail and need nothing from you here.</p>
+{f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
+{no_key}
+<section class="card">
+  <h2>Evaluate a brief</h2>
+  <p>The agent scores the brief against your rubric, quotes its evidence, and drafts the questions to send back.</p>
+  <form method="post" action="/new" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="workflow" value="brief-evaluation"/>{client_fields}
+    <label>The brief (PDF, Word or text file) <input type="file" name="brief_file"/></label>
+    <label><span class="or">or paste the brief</span> <textarea name="brief_text" rows="6"></textarea></label>
+    <button class="approve">Evaluate this brief</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Review creative work</h2>
+  <p>The agent rates the work against its brief, page by page, and writes feedback for the person who made it.</p>
+  <form method="post" action="/new" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="workflow" value="creative-review"/>{client_fields}
+    <label>The work (PDF or image files; export a deck as PDF) <input type="file" name="work_files" multiple/></label>
+    <label>The brief it answers <input type="file" name="brief_file"/></label>
+    <label><span class="or">or paste the brief</span> <textarea name="brief_text" rows="4"></textarea></label>
+    <label>Feedback is for
+      <select name="discipline"><option value="designer">a designer</option><option value="copywriter">a copywriter</option></select></label>
+    <label>Kind of work (for example outdoor, social, deck) <input type="text" name="work_kind" maxlength="40"/></label>
+    <button class="approve">Review this work</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Draft a document</h2>
+  <p>The agent asks what it needs, proposes an outline for you to approve, then writes and checks the draft.</p>
+  <form method="post" action="/new" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="workflow" value="strategy-drafting"/>{client_fields}
+    <label>The goal, in your words <textarea name="goal" rows="4" required></textarea></label>
+    <label>Kind of document
+      <select name="document_type"><option value="strategy">Strategy</option><option value="brief">Brief</option>
+        <option value="memo">Approval memo</option></select></label>
+    <label>Reader (for example the MD, the agency) <input type="text" name="audience" maxlength="120"/></label>
+    <label>Source documents (optional; with none, the agent reads the client's folder)
+      <input type="file" name="source_files" multiple/></label>
+    <button class="approve">Start this draft</button>
+  </form>
+</section>
+""")
+
+    @app.post("/new")
+    async def start_new_work(request: Request, background: BackgroundTasks):
+        form = await request.form()
+
+        def back(reason: str):
+            return RedirectResponse(f"/new?notice={quote(reason)}", status_code=303)
+
+        workflow = str(form.get("workflow") or "")
+        name = str(form.get("client_new") or "").strip() or str(form.get("client_existing") or "").strip()
+        if not name:
+            return back("Choose a client, or type a new client's name.")
+        try:
+            scope = engine.harness.clients.ensure(name)
+        except Exception as e:  # a name the folder rules refuse
+            return back(str(e))
+
+        async def stored(field: str) -> list[str] | str:
+            """Save the uploaded files of one field into the client's folder; their names, or a refusal."""
+            saved = []
+            for upload in form.getlist(field):
+                if not getattr(upload, "filename", ""):
+                    continue
+                data = await upload.read()
+                if len(data) > 20 * 1024 * 1024:
+                    return f"{upload.filename} is larger than 20 MB."
+                try:
+                    saved.append(engine.harness.clients.store_file(scope, upload.filename, data))
+                except Exception as e:
+                    return f"{upload.filename} could not be saved: {e}"
+            return saved
+
+        text = lambda field: str(form.get(field) or "").strip()  # noqa: E731
+        brief_files = await stored("brief_file")
+        if isinstance(brief_files, str):
+            return back(brief_files)
+        brief = {"brief_path": brief_files[0]} if brief_files else {"brief_text": text("brief_text")}
+        if workflow == "brief-evaluation":
+            if not brief_files and not text("brief_text"):
+                return back("Add the brief as a file, or paste it.")
+            inputs = brief
+        elif workflow == "creative-review":
+            work = await stored("work_files")
+            if isinstance(work, str):
+                return back(work)
+            if not work:
+                return back("Add the creative work as a PDF or image file.")
+            if not brief_files and not text("brief_text"):
+                return back("Add the brief the work answers, as a file or pasted text.")
+            inputs = {
+                **brief, "work_paths": work,
+                "discipline": text("discipline") if text("discipline") in ("designer", "copywriter") else "designer",
+                "work_kind": text("work_kind") or "general",
+            }
+        elif workflow == "strategy-drafting":
+            if not text("goal"):
+                return back("Say what the document is for.")
+            sources = await stored("source_files")
+            if isinstance(sources, str):
+                return back(sources)
+            inputs = {
+                "goal": text("goal"),
+                "document_type": text("document_type") if text("document_type") in ("strategy", "brief", "memo") else "strategy",
+                "audience": text("audience") or None, "source_paths": sources,
+            }
+        else:
+            return back("That kind of work is not one the agent does.")
+
+        # Record the run and answer at once; the agent works on it after the page has loaded.
+        run_id = engine.start_run(workflow, scope.name, inputs, work=False)
+        background.add_task(engine.work, run_id)
+        return RedirectResponse(f"/inspect/{run_id}", status_code=303)
+
     # --- runs screen ------------------------------------------------------------------
     @app.get("/runs/{run_id}/trace")
     def run_trace(run_id: str) -> dict:
@@ -671,10 +813,17 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         )
         prompts = ", ".join(f"{escape(node)} {escape(v)}" for node, v in trace["prompt_versions"]) or "none"
         flags = "".join(f"<li>{escape(str(f))}</li>" for f in run["flags"] or [])
-        return render(f"Run {run['id'][:8]}", "runs", f"""
+        working = run["status"] in ("queued", "running")
+        state_line = (
+            '<p class="banner" role="status">The agent is working on this. The page updates itself.</p>' if working else
+            '<p class="banner" role="status">This is waiting for you in the <a href="/queue">Approval queue</a>.</p>'
+            if run["status"] in ("waiting_for_approval", "waiting_for_input") else ""
+        )
+        return render(f"Run {run['id'][:8]}", "runs", refresh=4 if working else 0, body=f"""
 <h1>{escape(run["workflow"])} <span class="s-{escape(run["status"])}">{escape(run["status"].replace("_", " "))}</span></h1>
 <p class="meta">run <code>{escape(run["id"])}</code> · client {escape(run["client"])} · started {escape(run["created_at"])} ·
  updated {escape(run["updated_at"])}</p>
+{state_line}
 {f'<p class="error">{escape(run["error_reason"])}</p>' if run["error_reason"] else ""}
 <p class="total">${(run["cost_usd"] or 0):.4f} <span class="meta">{(run["tokens_in"] or 0):,} tokens in,
  {(run["tokens_out"] or 0):,} out{" · a fallback model answered" if run["fallback_used"] else ""}</span></p>
@@ -979,7 +1128,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
         failed = sum(r["created_at"] >= week_ago for r in db.list_runs(status="failed"))
         listing = "".join(rows) or (
-            "<p>No item needs your decision. New work appears here once a run reaches its approval step.</p>"
+            '<p>No item needs your decision. Start something on the <a href="/new">New work</a> screen; '
+            "it comes back here once the agent has a draft for you.</p>"
         )
         return render("Approval queue", "queue", f"""
 <h1>Approval queue</h1>
