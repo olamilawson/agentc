@@ -60,13 +60,16 @@ this repository implements **Delivery phase 1: Foundation**.
   set it serves open. `deploy/setup.sh` creates it. The PRD lists two-factor;
   the owner chose email and password, and a one-time code from an
   authenticator app stays available with `./deploy/setup.sh --with-code`.
-- **Interface** — the five screens share one shell and stylesheet
-  (`src/personal_agent/api/ui.py`), following the owner's Stitch design for
-  Chidimma OS: a dark rail, a slate canvas, white cards, a serif for display.
-  Four of that design's colours were darkened to meet contrast minimums; the
-  file lists each with its measured ratio. The design's two typefaces (Playfair
-  Display and Inter, SIL Open Font License) ship in `api/static/fonts` and load
-  from this server; the pages call no outside host.
+- **Interface** — the screens share one shell and stylesheet
+  (`src/personal_agent/api/ui.py`), ported from the owner's Stitch screens for
+  Chidimma OS: the navy rail with its workstreams, the top bar, white cards,
+  tinted icon circles, a purple accent. Home (`/`) is the dashboard: the
+  greeting, "My view", three counts, priorities, calls and recent work, and a
+  bar at the foot that starts work. It shows what the agent holds and invents
+  nothing. Secondary text and field edges sit one step darker than the screens
+  to meet contrast minimums; the file gives the ratios. The two typefaces
+  (Newsreader and Plus Jakarta Sans, SIL Open Font License) ship in
+  `api/static/fonts`; the pages call no outside host.
 - **Going live** — `deploy/go-live.md` is the checklist for ijeoma.pro on the
   Hostinger VPS. That server's own nginx holds ports 80 and 443 for several
   domains, so the app listens on `127.0.0.1:8100` and one nginx site

@@ -160,7 +160,7 @@ read the top of the script.
   sponsorship replies in a local outbox and sends none. `deploy/microsoft-graph.md`
   has the steps; a tenant administrator does the first four.
 - **Accepted skill changes do not persist.** The image carries the skill files,
-  so a change you accept on the Skill library screen disappears at the next
+  so a change you accept on the Memory & decisions screen disappears at the next
   deploy. Until the server mounts `skills/` from a git checkout, make skill
   changes in the repository.
 - **The mail watcher is off** until you set `PERSONAL_AGENT_N8N_SECRET` and

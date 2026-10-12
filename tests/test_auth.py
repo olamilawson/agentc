@@ -40,7 +40,7 @@ def _sign_in(client: TestClient, email: str = EMAIL, password: str = PASSWORD, *
 
 
 def test_every_screen_and_endpoint_needs_a_session(client):
-    for path in ("/queue", "/inspect", "/calendar", "/files", "/library", "/cost"):
+    for path in ("/", "/queue", "/inspect", "/calendar", "/files", "/library", "/cost"):
         page = client.get(path, headers={"accept": "text/html"})
         assert page.status_code == 303 and page.headers["location"].startswith("/login?next=")
     for path in ("/runs", "/clients", "/costs", "/ledger", "/skills", "/calls", "/approvals/pending"):
@@ -51,7 +51,7 @@ def test_every_screen_and_endpoint_needs_a_session(client):
     assert client.get("/health").json() == {"ok": True}
     assert client.post("/hooks/n8n/sponsorship", json={}).status_code in (401, 422)
     # The sign-in page needs its fonts; nothing else under /static is open.
-    font = client.get("/static/fonts/inter-latin-wght-normal.woff2")
+    font = client.get("/static/fonts/newsreader-latin-wght-normal.woff2")
     assert font.status_code == 200 and font.content[:4] == b"wOF2"
     assert client.get("/static/anything-else.txt").status_code == 401
 
@@ -109,7 +109,7 @@ def test_a_signed_in_browser_cannot_be_driven_from_another_site(client):
 
 def test_sign_in_never_redirects_off_the_site(client):
     away = client.post("/login", data={"email": EMAIL, "password": PASSWORD, "next": "//evil.example/x"})
-    assert away.headers["location"] == "/queue"
+    assert away.headers["location"] == "/"
 
 
 def test_a_server_without_a_sign_in_refuses_instead_of_serving_open(settings):
@@ -126,12 +126,12 @@ def test_pages_use_the_bundled_fonts_and_call_no_other_host(client):
     import personal_agent.api.ui as ui
 
     fonts = Path(ui.__file__).parent / "static" / "fonts"
-    for family in ("inter", "playfair-display"):
+    for family in ("newsreader", "plus-jakarta-sans"):
         for subset in ("latin", "latin-ext"):
             name = f"{family}-{subset}-wght-normal.woff2"
             assert (fonts / name).read_bytes()[:4] == b"wOF2"
             assert f"/static/fonts/{name}" in ui.CSS
-    assert (fonts / "Inter-LICENSE.txt").exists() and (fonts / "PlayfairDisplay-LICENSE.txt").exists()
+    assert (fonts / "Newsreader-LICENSE.txt").exists() and (fonts / "PlusJakartaSans-LICENSE.txt").exists()
     page = client.get("/login").text
     assert "http://" not in page and "https://" not in page  # no font host, no outside request at all
 

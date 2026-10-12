@@ -74,7 +74,9 @@ class Settings(BaseModel):
     graph_calendar: str | None = None
     calendar: CalendarPolicy = CalendarPolicy()
     # The name shown in the rail and the page titles.
-    brand_name: str = "Personal Agent"
+    brand_name: str = "Chidimma OS"
+    # The name the home screen greets.
+    owner_name: str = "Chidimma"
     # Owner sign-in (see auth.py). Email, password hash and session secret all
     # set: every page needs a session. A TOTP secret adds a one-time code.
     owner_email: str | None = None
@@ -115,7 +117,8 @@ def load_settings() -> Settings:
     calendar_path = Path(env("PERSONAL_AGENT_CALENDAR") or REPO_ROOT / "config" / "calendar.yaml")
     calendar = CalendarPolicy(**(yaml.safe_load(calendar_path.read_text()) if calendar_path.exists() else {}))
     return Settings(
-        brand_name=env("PERSONAL_AGENT_NAME") or "Personal Agent",
+        brand_name=env("PERSONAL_AGENT_NAME") or "Chidimma OS",
+        owner_name=env("PERSONAL_AGENT_OWNER_NAME") or "Chidimma",
         graph_tenant_id=env("MS_GRAPH_TENANT_ID") or None,
         graph_client_id=env("MS_GRAPH_CLIENT_ID") or None,
         graph_client_secret=env("MS_GRAPH_CLIENT_SECRET") or None,

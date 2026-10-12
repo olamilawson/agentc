@@ -54,7 +54,7 @@ def test_a_pasted_brief_for_a_new_client_becomes_a_run_and_reaches_the_queue(set
     assert client.get("/clients").json() == ["Acme Bank"]  # the new client's folder exists
     assert len(client.get("/approvals/pending").json()) == 1
     page = client.get(f"/inspect/{run['id']}").text
-    assert 'waiting for you in the <a href="/queue">Approval queue</a>' in page and "http-equiv" not in page
+    assert 'waiting for you in the <a href="/queue">Review</a>' in page and "http-equiv" not in page
 
 
 def test_an_uploaded_brief_is_saved_to_the_clients_folder_and_evaluated_from_there(settings):

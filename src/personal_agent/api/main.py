@@ -2,8 +2,8 @@
 
 The approval queue is the heart: every outbound action waits here, the exact
 content is shown before anything can be released, and an approval matches the
-content by hash. Minimal server-rendered UI for now; the full interface
-(Chidimma-OS-style app) arrives in a later phase and talks to this API.
+content by hash. The pages are server-rendered inside the shell in ui.py,
+which follows the owner's Chidimma OS screens.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 from urllib.parse import quote, urlsplit
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -134,6 +135,30 @@ READ_ALOUD_SCRIPT = """<script>
 </script>"""
 
 
+# The home screen's bar. The goal travels to the New work screen in the browser's
+# own session storage, so client detail never lands in a URL or a server log.
+DOCK_SCRIPT = """<script>
+(function () {
+  var form = document.getElementById('ask'), field = document.getElementById('ask-goal');
+  if (!form) return;
+  form.addEventListener('submit', function () {
+    try { sessionStorage.setItem('goal', field.value); } catch (e) {}
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); field.focus(); }
+  });
+})();
+</script>"""
+GOAL_SCRIPT = """<script>
+(function () {
+  var goal = null;
+  try { goal = sessionStorage.getItem('goal'); sessionStorage.removeItem('goal'); } catch (e) {}
+  var field = document.querySelector('textarea[name="goal"]');
+  if (goal && field) { field.value = goal; field.focus(); }
+})();
+</script>"""
+
+
 def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None, mail=None) -> FastAPI:
     settings = settings or load_settings()
     db = Database(settings.database_url)
@@ -181,19 +206,19 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return await call_next(request)
 
     @app.get("/login", response_class=HTMLResponse)
-    def sign_in(next: str = "/queue"):
+    def sign_in(next: str = "/"):
         if guard is None:
-            return RedirectResponse("/queue", status_code=303)
+            return RedirectResponse("/", status_code=303)
         return ui.sign_in_page(settings.brand_name, next_path=next, with_code=with_code)
 
     @app.post("/login")
     async def sign_in_submit(request: Request):
         if guard is None:
-            return RedirectResponse("/queue", status_code=303)
+            return RedirectResponse("/", status_code=303)
         form = await request.form()
-        target = str(form.get("next") or "/queue")
+        target = str(form.get("next") or "/")
         if not target.startswith("/") or target.startswith("//"):
-            target = "/queue"  # never redirect off this site
+            target = "/"  # never redirect off this site
         if guard.locked():
             return HTMLResponse(ui.sign_in_page(
                 settings.brand_name, "Five failed attempts locked sign-in. Try again in 15 minutes.", target, with_code
@@ -217,18 +242,19 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         response.delete_cookie(auth.SESSION_COOKIE, path="/")
         return response
 
-    def render(title: str, active: str, body: str, script: str = "", refresh: int = 0) -> str:
+    def _zone() -> ZoneInfo:
+        return ZoneInfo(settings.calendar.timezone)
+
+    def render(title: str, active: str, body: str, script: str = "", refresh: int = 0, dock: str = "") -> str:
         waiting = len(db.list_runs(status="waiting_for_approval")) + len(db.list_runs(status="waiting_for_input"))
+        today = datetime.now(_zone())
         return ui.page(
             title, active, body, brand=settings.brand_name, waiting=waiting,
-            signed_in=guard is not None, script=script, refresh=refresh,
+            signed_in=guard is not None, script=script, refresh=refresh, dock=dock,
+            clients=engine.harness.clients.list_clients(), today=f"{today:%A}, {today.day} {today:%B %Y}",
         )
 
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-
-    @app.get("/")
-    def home():
-        return RedirectResponse("/queue", status_code=303)
 
     @app.get("/health")
     def health() -> dict:
@@ -605,11 +631,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         )
         return render("New work", "new", f"""
 <h1>New work</h1>
-<p class="lede">Give the agent a piece of work. It prepares a draft and puts it in your approval queue.
+<p class="lede">Give the agent a piece of work. It prepares a draft and puts it in Review for your decision.
  Sponsorship enquiries arrive by mail and need nothing from you here.</p>
 {f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
 {no_key}
-<section class="card">
+<section class="card" id="brief">
   <h2>Evaluate a brief</h2>
   <p>The agent scores the brief against your rubric, quotes its evidence, and drafts the questions to send back.</p>
   <form method="post" action="/new" enctype="multipart/form-data" class="stack">
@@ -619,7 +645,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <button class="approve">Evaluate this brief</button>
   </form>
 </section>
-<section class="card">
+<section class="card" id="creative">
   <h2>Review creative work</h2>
   <p>The agent rates the work against its brief, page by page, and writes feedback for the person who made it.</p>
   <form method="post" action="/new" enctype="multipart/form-data" class="stack">
@@ -633,7 +659,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <button class="approve">Review this work</button>
   </form>
 </section>
-<section class="card">
+<section class="card" id="draft">
   <h2>Draft a document</h2>
   <p>The agent asks what it needs, proposes an outline for you to approve, then writes and checks the draft.</p>
   <form method="post" action="/new" enctype="multipart/form-data" class="stack">
@@ -648,7 +674,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <button class="approve">Start this draft</button>
   </form>
 </section>
-""")
+""", script=GOAL_SCRIPT)
 
     @app.post("/new")
     async def start_new_work(request: Request, background: BackgroundTasks):
@@ -816,7 +842,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         working = run["status"] in ("queued", "running")
         state_line = (
             '<p class="banner" role="status">The agent is working on this. The page updates itself.</p>' if working else
-            '<p class="banner" role="status">This is waiting for you in the <a href="/queue">Approval queue</a>.</p>'
+            '<p class="banner" role="status">This is waiting for you in the <a href="/queue">Review</a>.</p>'
             if run["status"] in ("waiting_for_approval", "waiting_for_input") else ""
         )
         return render(f"Run {run['id'][:8]}", "runs", refresh=4 if working else 0, body=f"""
@@ -1035,8 +1061,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             f"<details><summary>{escape(name)}</summary><pre>{escape(text)}</pre></details>"
             for name, text in sorted(library.items())
         )
-        return render("Skill library", "library", f"""
-<h1>Skill library</h1>
+        return render("Memory & decisions", "library", f"""
+<h1>Memory &amp; decisions</h1>
 <p class="lede">The agent cannot edit these files. The learning review proposes a change here, and it takes
  effect once you accept it.</p>
 <p class="meta">library version <code>{version[:12]}</code></p>
@@ -1047,6 +1073,111 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <h2>Skills</h2>
 {files}
 """)
+
+    # --- home -------------------------------------------------------------------------
+    TAGS = {
+        "brief-evaluation": ("Brief", "c-blue"), "strategy-drafting": ("Strategy", "c-purple"),
+        "creative-review": ("Creative", "c-rose"), "sponsorship-triage": ("Sponsorship", "c-amber"),
+        "call-change": ("Calls", "c-emerald"),
+    }
+    STATUS_WORDS = {
+        "waiting_for_approval": "waiting for you", "waiting_for_input": "has questions for you",
+        "done": "done", "failed": "failed", "cancelled": "cancelled", "running": "working", "queued": "queued",
+    }
+
+    @app.get("/", response_class=HTMLResponse)
+    def home() -> str:
+        icon = ui.icon
+        hour = datetime.now(_zone()).hour
+        part = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
+        waiting = [
+            (item["content"].get("subject") or "Draft for your approval", item) for item in engine.queue()
+        ] + [("Questions before drafting", ask) for ask in engine.input_requests()]
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
+        failed = sum(r["created_at"] >= week_ago for r in db.list_runs(status="failed"))
+        moment = datetime.now(timezone.utc).isoformat(timespec="minutes")
+        ahead = sorted(
+            (c for c in db.list_calls() if c["status"] == "scheduled" and c["start"] > moment), key=lambda c: c["start"]
+        )
+
+        if waiting:
+            title, first = waiting[0]
+            view = (title, f"For {first['client']}. Open Review to read it and decide.", "/queue")
+        else:
+            view = ("Nothing is waiting on you.", "Start a piece of work and the draft comes back here.", "/new")
+
+        def priority(n: int, title: str, item: dict) -> str:
+            label, colour = TAGS.get(item["workflow"], (item["workflow"], "c-slate"))
+            return (
+                f'<li><a href="/queue"><span class="lead"><span class="num {colour}">{n}</span>'
+                f'<span><b>{escape(title)}</b><small>{escape(item["client"])}</small></span></span>'
+                f'<span class="end"><span class="tag {colour}">{escape(label)}</span>{icon("chevron")}</span></a></li>'
+            )
+
+        priorities = "".join(priority(n, title, item) for n, (title, item) in enumerate(waiting[:5], 1))
+        calls = "".join(
+            f'<li><a href="/calendar"><span class="lead"><span><b>{escape(c["subject"] or "Call")}</b>'
+            f'<small>{escape(c["label"])} · with {escape(c["sender"])}</small></span></span>'
+            f'<span class="end">{icon("chevron")}</span></a></li>'
+            for c in ahead[:5]
+        )
+        recent = "".join(
+            f'<li><a href="/inspect/{r["id"]}"><span class="lead"><span class="dot {escape(r["status"])}"></span>'
+            f'<span><b>{escape(TAGS.get(r["workflow"], (r["workflow"], ""))[0])} · {escape(r["client"])}</b>'
+            f'<small>{escape(STATUS_WORDS.get(r["status"], r["status"]))}</small></span></span>'
+            f'<span class="end">{icon("chevron")}</span></a></li>'
+            for r in db.list_runs()[:5]
+        )
+        connected = engine.harness.mail is not None
+        missing = _missing_model_keys()
+        key_state = f"No {' or '.join(missing)} on the server yet" if missing else "Model key set"
+        dock = f"""<div class="dock">
+  <form action="/new#draft" method="get" id="ask">
+    <label for="ask-goal" style="position:absolute;left:-9999px">Tell the agent what you need</label>
+    <input type="text" id="ask-goal" placeholder="Tell the agent what you need" autocomplete="off" maxlength="2000"/>
+    <span class="kbd">Ctrl K</span>
+    <button aria-label="Start a draft with this goal">{icon("up")}</button>
+  </form>
+  <div class="pills">
+    <a href="/new#brief">{icon("brief")}Evaluate a brief</a>
+    <a href="/new#creative">{icon("creative")}Review creative work</a>
+    <a href="/new#draft">{icon("draft")}Draft a document</a>
+    <span class="state">{escape(key_state)}</span>
+  </div>
+</div>"""
+        return render("Home", "home", f"""
+<h1>Good {part}, {escape(settings.owner_name)}.</h1>
+<p class="lede">Here's what matters today.</p>
+{_cap_banner()}
+<a class="hero" href="{view[2]}">
+  <span class="lead"><span class="disc purple">{icon("spark")}</span>
+    <span><span class="myview">My view</span><strong>{escape(view[0])}</strong><small>{escape(view[1])}</small></span></span>
+  <span class="go">{icon("chevron")}</span>
+</a>
+<div class="metrics">
+  <a class="metric" href="/queue"><span class="lead"><span class="disc rose">{icon("decide")}</span>
+    <span><b>{len(waiting)}</b><span>{"Decision" if len(waiting) == 1 else "Decisions"}</span><small>Need your input</small></span></span>{icon("chevron")}</a>
+  <a class="metric" href="/inspect?status=failed"><span class="lead"><span class="disc amber">{icon("risk")}</span>
+    <span><b>{failed}</b><span>Failed {"run" if failed == 1 else "runs"}</span><small>In the last 7 days</small></span></span>{icon("chevron")}</a>
+  <a class="metric" href="/calendar"><span class="lead"><span class="disc indigo">{icon("calls")}</span>
+    <span><b>{len(ahead)}</b><span>{"Call" if len(ahead) == 1 else "Calls"} ahead</span><small>In your calendar</small></span></span>{icon("chevron")}</a>
+</div>
+<div class="columns">
+  <section class="card">
+    <div class="linkrow"><h2>Top priorities</h2><a href="/queue">View all {icon("arrow")}</a></div>
+    {f'<ul class="rows">{priorities}</ul>' if priorities else '<p class="quiet">No item needs your decision.</p>'}
+  </section>
+  <section class="card">
+    <div class="linkrow"><h2>Calls ahead</h2><a href="/calendar">View all {icon("arrow")}</a></div>
+    {"" if connected else '<p class="eyebrow">Calendar not connected</p>'}
+    {f'<ul class="rows">{calls}</ul>' if calls else '<p class="quiet">No call is scheduled.</p>'}
+  </section>
+  <section class="card">
+    <div class="linkrow"><h2>Recent work</h2><a href="/inspect">View all {icon("arrow")}</a></div>
+    {f'<ul class="rows">{recent}</ul>' if recent else '<p class="quiet">No run yet. Start one below.</p>'}
+  </section>
+</div>
+""", script=DOCK_SCRIPT, dock=dock)
 
     @app.get("/queue", response_class=HTMLResponse)
     def queue_page() -> str:
@@ -1131,8 +1262,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             '<p>No item needs your decision. Start something on the <a href="/new">New work</a> screen; '
             "it comes back here once the agent has a draft for you.</p>"
         )
-        return render("Approval queue", "queue", f"""
-<h1>Approval queue</h1>
+        return render("Review", "queue", f"""
+<h1>Review</h1>
 <p class="lede">Each item below waits for your decision. You see the full content before you release it.</p>
 {_cap_banner()}
 <div class="strip">
