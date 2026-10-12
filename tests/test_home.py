@@ -34,7 +34,8 @@ def test_home_shows_the_waiting_item_the_client_and_the_recent_run(settings, mon
     run_id = sent.headers["location"].rsplit("/", 1)[1]
     page = client.get("/").text
     assert "<b>1</b><span>Decision</span>" in page
-    assert "For Acme Bank. Open Review to read it and decide." in page
+    assert "For Acme Bank. Open it to read it and decide." in page
+    assert page.count(f'href="/queue#d-{run_id}"') == 2  # My view and the priority both open its sheet
     assert '<span class="tag c-blue">Brief</span>' in page
     assert f'href="/inspect/{run_id}"' in page and "waiting for you" in page
     assert '<span>Acme Bank</span>' in page and ">AB</span>" in page  # the client is a workstream in the rail
@@ -46,3 +47,29 @@ def test_the_goal_typed_on_home_never_travels_in_the_url(settings):
     page = _client(settings).get("/").text
     assert 'id="ask-goal"' in page and 'name="goal"' not in page  # no name, so the form sends no text
     assert "sessionStorage.getItem('goal')" in _client(settings).get("/new").text
+
+
+def test_review_lists_the_item_and_holds_its_sheet_with_the_three_decisions(settings):
+    client = _client(settings, extract_fields=[RECORD], score_by_rubric=[SCORES], draft_assessment=[ASSESSMENT],
+                     verify_evidence=[VERDICTS_OK])
+    sent = client.post("/new", data={"workflow": "brief-evaluation", "client_new": "Acme Bank", "brief_text": BRIEF})
+    run_id = sent.headers["location"].rsplit("/", 1)[1]
+    page = client.get("/queue").text
+    assert f'<a href="#d-{run_id}" data-open="d-{run_id}">' in page  # the list row opens the sheet
+    assert f'<dialog class="sheet" id="d-{run_id}" aria-labelledby="t-{run_id}" open>' in page  # readable with no script
+    assert "Acme Bank workstream" in page and "Decision 1 of 1" in page and "<strong>Context:</strong>" in page
+    for value in ("sent_back", "rejected", "approved"):
+        assert f'<button form="f-{run_id}" name="decision" value="{value}"' in page
+    assert "showModal" in page and "Your approval covers this content" in page
+
+
+def test_a_decision_from_the_sheet_returns_the_browser_to_review(settings):
+    client = _client(settings, extract_fields=[RECORD], score_by_rubric=[SCORES], draft_assessment=[ASSESSMENT],
+                     verify_evidence=[VERDICTS_OK])
+    sent = client.post("/new", data={"workflow": "brief-evaluation", "client_new": "Acme Bank", "brief_text": BRIEF})
+    run_id = sent.headers["location"].rsplit("/", 1)[1]
+    back = client.post(f"/runs/{run_id}/approval", data={"decision": "rejected", "comment": "Not this quarter."},
+                       headers={"accept": "text/html"})
+    assert back.status_code == 303 and back.headers["location"] == "/queue"
+    assert client.get(f"/runs/{run_id}").json()["status"] != "waiting_for_approval"
+    assert "No item needs your decision." in client.get("/queue").text

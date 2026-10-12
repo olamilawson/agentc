@@ -103,7 +103,7 @@ READ_ALOUD_SCRIPT = """<script>
   function read(button) {
     var voice = localVoice();
     if (!voice) { button.textContent = 'No on-device voice in this browser'; return; }
-    var card = button.closest('.card');
+    var card = button.closest('dialog, .card');
     var text = Array.prototype.map.call(card.querySelectorAll('.say'), function (e) { return e.innerText; }).join('\\n');
     // Markdown marks are for the eye; a list number or a heading sign is not read out.
     var parts = text.split(/\\n+/).map(function (line) {
@@ -131,9 +131,41 @@ READ_ALOUD_SCRIPT = """<script>
     });
   });
   window.addEventListener('pagehide', stop);
+  document.querySelectorAll('dialog').forEach(function (d) { d.addEventListener('close', stop); });
 })();
 </script>"""
 
+
+# The review sheets. The server renders each one open, so a browser without
+# scripts shows them down the page; with scripts they become modal dialogs
+# opened from the list (or from a link that names one, as the home screen's do).
+SHEET_SCRIPT = """<script>
+(function () {
+  var sheets = document.querySelectorAll('dialog.sheet');
+  if (!sheets.length || !sheets[0].showModal) return;
+  function show(id) {
+    var sheet = document.getElementById(id);
+    if (sheet && sheet.classList.contains('sheet') && !sheet.open) sheet.showModal();
+  }
+  sheets.forEach(function (sheet) {
+    sheet.close();
+    sheet.addEventListener('click', function (e) {
+      if (e.target === sheet || e.target.closest('[data-close]')) sheet.close();
+    });
+    sheet.addEventListener('close', function () {
+      if (location.hash === '#' + sheet.id) history.replaceState(null, '', location.pathname);
+    });
+  });
+  document.querySelectorAll('[data-open]').forEach(function (link) {
+    link.addEventListener('click', function (e) {
+      e.preventDefault();
+      history.replaceState(null, '', '#' + link.dataset.open);
+      show(link.dataset.open);
+    });
+  });
+  if (location.hash) show(location.hash.slice(1));
+})();
+</script>"""
 
 # The home screen's bar. The goal travels to the New work screen in the browser's
 # own session storage, so client detail never lands in a URL or a server log.
@@ -439,13 +471,19 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             raise HTTPException(404, "run not found")
         return run
 
+    def _back_to_review(request: Request):
+        """A browser that posted a sheet's form goes back to Review; an API client gets the result."""
+        if "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/queue", status_code=303)
+        return None
+
     @app.get("/approvals/pending")
     def pending() -> list[dict]:
         return engine.queue()
 
     @app.post("/runs/{run_id}/approval")
-    async def decide(run_id: str, request: Request) -> dict:
-        # Accepts JSON (API clients) and form-encoded posts (the queue page buttons).
+    async def decide(run_id: str, request: Request):
+        # Accepts JSON (API clients) and form-encoded posts (the review sheet's buttons).
         if request.headers.get("content-type", "").startswith("application/json"):
             body = ApprovalDecision(**(await request.json()))
         else:
@@ -457,18 +495,19 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 edited_body=(str(form["edited_body"]).replace("\r\n", "\n") if "edited_body" in form else None),
             )
         try:
-            return engine.approve(run_id, body.decision, body.comment, body.edited_body)
+            result = engine.approve(run_id, body.decision, body.comment, body.edited_body)
         except KeyError:
             raise HTTPException(404, "run not found")
         except ValueError as e:
             raise HTTPException(409, str(e))
+        return _back_to_review(request) or result
 
     @app.get("/inputs/pending")
     def pending_inputs() -> list[dict]:
         return engine.input_requests()
 
     @app.post("/runs/{run_id}/input")
-    async def give_input(run_id: str, request: Request) -> dict:
+    async def give_input(run_id: str, request: Request):
         # The owner's answers to a run that asked questions and is waiting.
         if request.headers.get("content-type", "").startswith("application/json"):
             body = OwnerInput(**(await request.json()))
@@ -476,11 +515,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             form = await request.form()
             body = OwnerInput(answers=str(form.get("answers", "")).replace("\r\n", "\n"))
         try:
-            return engine.provide_input(run_id, body.answers)
+            result = engine.provide_input(run_id, body.answers)
         except KeyError:
             raise HTTPException(404, "run not found")
         except ValueError as e:
             raise HTTPException(409, str(e))
+        return _back_to_review(request) or result
 
     @app.get("/runs/{run_id}/edits")
     def owner_edits(run_id: str) -> list[dict]:
@@ -1102,14 +1142,14 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 
         if waiting:
             title, first = waiting[0]
-            view = (title, f"For {first['client']}. Open Review to read it and decide.", "/queue")
+            view = (title, f"For {first['client']}. Open it to read it and decide.", f"/queue#d-{first['run_id']}")
         else:
             view = ("Nothing is waiting on you.", "Start a piece of work and the draft comes back here.", "/new")
 
         def priority(n: int, title: str, item: dict) -> str:
             label, colour = TAGS.get(item["workflow"], (item["workflow"], "c-slate"))
             return (
-                f'<li><a href="/queue"><span class="lead"><span class="num {colour}">{n}</span>'
+                f'<li><a href="/queue#d-{item["run_id"]}"><span class="lead"><span class="num {colour}">{n}</span>'
                 f'<span><b>{escape(title)}</b><small>{escape(item["client"])}</small></span></span>'
                 f'<span class="end"><span class="tag {colour}">{escape(label)}</span>{icon("chevron")}</span></a></li>'
             )
@@ -1181,98 +1221,139 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 
     @app.get("/queue", response_class=HTMLResponse)
     def queue_page() -> str:
-        rows = []
-        for item in engine.queue():
-            error = (
-                f'<div class="error">{escape(item["error"])}</div>' if item.get("error") else ""
-            )
+        icon = ui.icon
+        approvals, asks = engine.queue(), engine.input_requests()
+        total = len(approvals) + len(asks)
+        mailbox = engine.harness.mail is not None
+
+        def head(n: int, run: dict, title: str) -> str:
+            label, colour = TAGS.get(run["workflow"], (run["workflow"], "c-slate"))
+            return f"""<div class="sheet-strip"></div>
+  <header class="sheet-head">
+    {ui.stream_badge(run["client"])}
+    <div class="grow">
+      <p class="chips"><span class="tag c-emerald">{escape(run["client"])} workstream</span>
+        <span class="tag c-rose">Decision {n} of {total}</span>
+        <span class="tag {colour}">{escape(label)}</span></p>
+      <h2 class="say" id="t-{run["run_id"]}">{escape(title)}</h2>
+    </div>
+    <button type="button" class="close" data-close aria-label="Close">{icon("x")}</button>
+  </header>"""
+
+        def context(text: str) -> str:
+            return f'<p class="context">{icon("info")}<span><strong>Context:</strong> {escape(text)}</span></p>'
+
+        rows, sheets = [], []
+        for n, item in enumerate(approvals, 1):
+            run_id, content = item["run_id"], item["content"]
+            title = content.get("subject") or "Draft for your approval"
+            approve, effect = {
+                "send": ("Approve and send this reply", "Approve it and the agent sends this reply."),
+                "acknowledge": ("Acknowledge, send nothing", "Acknowledge it and the agent sends nothing."),
+                "invite": ("Approve and send this invitation", "Approve it and the agent sends this invitation."),
+                "move": ("Approve and move this call", "Approve it and the agent moves this call."),
+                "cancel": ("Approve and cancel this call", "Approve it and the agent cancels this call."),
+                "outline": ("Approve outline and start the draft", "Approve the outline and the agent starts the draft."),
+                "save": ("Approve and save this document", "Approve it and the agent saves this document."),
+            }.get(item.get("action"), ("Approve and release this content", "Approve it and the agent releases this content."))
+            if item.get("action") == "send" and not mailbox:
+                effect += " No mailbox is connected yet, so the reply waits in the outbox."
             # Drafted content derives from untrusted material: always escaped.
-            content = item["content"]
             notes = "".join(f"<li>{escape(str(note))}</li>" for note in item.get("notes", []))
-            notes = f'<ul class="notes say">{notes}</ul>' if notes else ""
+            evaluation = (
+                f"""<section class="evaluation"><span class="mark">{icon("spark")}</span>
+      <div><p class="eyebrow">{escape(settings.brand_name)} evaluation</p><ul class="notes say">{notes}</ul></div></section>"""
+                if notes else ""
+            )
+            error = f'<p class="banner stop error" role="alert">{escape(item["error"])}</p>' if item.get("error") else ""
             to = f'<p class="meta say">To: {escape(content["to"])}</p>' if content.get("to") else ""
-            approve = {
-                "send": "Approve and send this reply",
-                "acknowledge": "Acknowledge, send nothing",
-                "invite": "Approve and send this invitation",
-                "move": "Approve and move this call",
-                "cancel": "Approve and cancel this call",
-                "outline": "Approve outline and start the draft",
-                "save": "Approve and save this document",
-            }.get(item.get("action"), "Approve and release this content")
             edit = (
                 f"""<details><summary>Edit, then approve</summary>
-                    <form method="post" action="/runs/{item["run_id"]}/approval" class="edit">
-                      <input type="hidden" name="decision" value="approved"/>
-                      <textarea name="edited_body" rows="16" aria-label="Your edited version">{escape(content.get("body", ""))}</textarea>
-                      <button class="approve">Approve my edited version</button>
-                    </form></details>"""
+      <form method="post" action="/runs/{run_id}/approval" class="edit">
+        <input type="hidden" name="decision" value="approved"/>
+        <textarea name="edited_body" rows="16" aria-label="Your edited version">{escape(content.get("body", ""))}</textarea>
+        <button class="approve">Approve my edited version</button>
+      </form></details>"""
                 if item.get("editable") else ""
             )
-            rows.append(
-                f"""
-                <section class="card">
-                  <h2 class="say">{escape(content.get("subject", ""))}</h2>
-                  <p class="meta">run {item["run_id"]} · {escape(item["workflow"])} · client {escape(item["client"])}</p>
-                  <button type="button" class="read" hidden>Read aloud</button>
-                  {error}
-                  {notes}
-                  {to}
-                  <pre class="say">{escape(content.get("body", ""))}</pre>
-                  <p class="meta">Your approval covers this content: <code>{item["content_hash"][:16]}</code></p>
-                  {edit}
-                  <div class="actions">
-                    <form method="post" action="/runs/{item["run_id"]}/approval">
-                      <input type="hidden" name="decision" value="approved"/>
-                      <button class="approve">{approve}</button>
-                    </form>
-                    <form method="post" action="/runs/{item["run_id"]}/approval">
-                      <input type="hidden" name="decision" value="sent_back"/>
-                      <input type="text" name="comment" placeholder="change to make" aria-label="Change to make"/>
-                      <button class="sendback">Send back with a comment</button>
-                    </form>
-                    <form method="post" action="/runs/{item["run_id"]}/approval">
-                      <input type="hidden" name="decision" value="rejected"/>
-                      <input type="text" name="comment" placeholder="reason for rejecting" aria-label="Reason for rejecting"/>
-                      <button class="reject">Reject</button>
-                    </form>
-                  </div>
-                </section>"""
-            )
-        for ask in engine.input_requests():
+            sheets.append(f"""<dialog class="sheet" id="d-{run_id}" aria-labelledby="t-{run_id}" open>
+  {head(n, item, title)}
+  <div class="sheet-body">
+    {context("The agent prepared this for " + item["client"] + ". " + effect)}
+    {error}
+    {evaluation}
+    <div class="linkrow"><p class="eyebrow">The content you approve</p>
+      <button type="button" class="read" hidden>Read aloud</button></div>
+    {to}
+    <pre class="say">{escape(content.get("body", ""))}</pre>
+    {edit}
+    <form method="post" action="/runs/{run_id}/approval" id="f-{run_id}" class="stack">
+      <label class="eyebrow" for="c-{run_id}">Change to make, or reason for rejecting (optional)</label>
+      <textarea id="c-{run_id}" name="comment" rows="2" maxlength="4000"></textarea>
+    </form>
+    <p class="meta">Your approval covers this content: <code>{item["content_hash"][:16]}</code> · run {run_id}</p>
+  </div>
+  <footer class="sheet-foot">
+    <span class="actions">
+      <button form="f-{run_id}" name="decision" value="sent_back" class="sendback">{icon("note")}Request revisions</button>
+      <button form="f-{run_id}" name="decision" value="rejected" class="reject">Reject</button>
+    </span>
+    <button form="f-{run_id}" name="decision" value="approved" class="approve">{icon("check")}{approve}</button>
+  </footer>
+</dialog>""")
+            label, colour = TAGS.get(item["workflow"], (item["workflow"], "c-slate"))
+            rows.append((run_id, title, item["client"], label, colour))
+
+        for n, ask in enumerate(asks, len(approvals) + 1):
+            run_id = ask["run_id"]
             questions = "".join(f"<li>{escape(str(q))}</li>" for q in ask["questions"])
-            rows.append(
-                f"""
-                <section class="card">
-                  <h2 class="say">Questions before drafting</h2>
-                  <p class="meta">run {ask["run_id"]} · {escape(ask["workflow"])} · client {escape(ask["client"])}</p>
-                  <button type="button" class="read" hidden>Read aloud</button>
-                  <p class="say">{escape(ask["goal"])}</p>
-                  <ol class="say">{questions}</ol>
-                  <form method="post" action="/runs/{ask["run_id"]}/input" class="edit">
-                    <textarea name="answers" rows="6" placeholder="Your answers" aria-label="Your answers"></textarea>
-                    <button class="approve">Send answers and draft the outline</button>
-                  </form>
-                </section>"""
-            )
-        approvals, questions = len(engine.queue()), len(engine.input_requests())
+            sheets.append(f"""<dialog class="sheet" id="d-{run_id}" aria-labelledby="t-{run_id}" open>
+  {head(n, ask, "Questions before drafting")}
+  <div class="sheet-body">
+    {context("The agent needs your answers before it drafts the outline for " + ask["client"] + ".")}
+    <div class="linkrow"><p class="eyebrow">Your goal</p><button type="button" class="read" hidden>Read aloud</button></div>
+    <p class="say">{escape(ask["goal"])}</p>
+    <p class="eyebrow">The questions</p>
+    <ol class="say">{questions}</ol>
+    <form method="post" action="/runs/{run_id}/input" id="f-{run_id}" class="stack">
+      <label class="eyebrow" for="c-{run_id}">Your answers</label>
+      <textarea id="c-{run_id}" name="answers" rows="6" required></textarea>
+    </form>
+    <p class="meta">run {run_id}</p>
+  </div>
+  <footer class="sheet-foot"><span></span>
+    <button form="f-{run_id}" class="approve">{icon("check")}Send answers and draft the outline</button>
+  </footer>
+</dialog>""")
+            label, colour = TAGS.get(ask["workflow"], (ask["workflow"], "c-slate"))
+            rows.append((run_id, "Questions before drafting", ask["client"], label, colour))
+
+        listing = "".join(
+            f'<li><a href="#d-{run_id}" data-open="d-{run_id}"><span class="lead"><span class="num {colour}">{n}</span>'
+            f'<span><b>{escape(title)}</b><small>{escape(client)}</small></span></span>'
+            f'<span class="end"><span class="tag {colour}">{escape(label)}</span>{icon("chevron")}</span></a></li>'
+            for n, (run_id, title, client, label, colour) in enumerate(rows, 1)
+        )
         week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
         failed = sum(r["created_at"] >= week_ago for r in db.list_runs(status="failed"))
-        listing = "".join(rows) or (
+        waiting = (
+            f'<section class="card"><div class="linkrow"><h2>Waiting for you</h2></div><ul class="rows">{listing}</ul></section>'
+            if rows else
             '<p>No item needs your decision. Start something on the <a href="/new">New work</a> screen; '
             "it comes back here once the agent has a draft for you.</p>"
         )
         return render("Review", "queue", f"""
 <h1>Review</h1>
-<p class="lede">Each item below waits for your decision. You see the full content before you release it.</p>
+<p class="lede">Each item below waits for your decision. Open one to read the full content before you release it.</p>
 {_cap_banner()}
 <div class="strip">
-  <a href="/queue"><strong>{approvals}</strong>{"approval" if approvals == 1 else "approvals"} waiting</a>
-  <a href="/queue"><strong>{questions}</strong>{"run" if questions == 1 else "runs"} with questions for you</a>
+  <a href="/queue"><strong>{len(approvals)}</strong>{"approval" if len(approvals) == 1 else "approvals"} waiting</a>
+  <a href="/queue"><strong>{len(asks)}</strong>{"run" if len(asks) == 1 else "runs"} with questions for you</a>
   <a href="/inspect?status=failed"><strong>{failed}</strong>failed {"run" if failed == 1 else "runs"} in the last 7 days</a>
 </div>
-{listing}
-""", script=READ_ALOUD_SCRIPT)
+{waiting}
+{"".join(sheets)}
+""", script=SHEET_SCRIPT + READ_ALOUD_SCRIPT)
 
     return app
 

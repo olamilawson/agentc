@@ -183,6 +183,44 @@ code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .pills a svg.i { width: 14px; height: 14px; }
 .pills .state { margin-left: auto; }
 
+/* --- the review sheet: one decision, read in full, in a dialog --- */
+dialog.sheet { width: min(768px, calc(100vw - 32px)); max-height: 90vh; padding: 0; border: 1px solid var(--line-strong);
+  border-radius: 24px; background: #fff; color: var(--text); overflow: hidden; flex-direction: column;
+  box-shadow: 0 25px 60px -15px rgba(15, 23, 42, .25); }
+dialog.sheet[open] { display: flex; }
+dialog.sheet::backdrop { background: rgba(15, 23, 42, .4); backdrop-filter: blur(8px); }
+dialog.sheet:not(:modal) { position: static; width: auto; max-width: 768px; max-height: none; margin: 16px 0; }
+.sheet-strip { height: 6px; flex: none; background: linear-gradient(90deg, #9333ea, #3b82f6, #10b981); }
+.sheet-head { display: flex; align-items: flex-start; gap: 16px; padding: 20px 28px; border-bottom: 1px solid var(--line-strong); flex: none; }
+.sheet-head .grow { flex: 1; min-width: 0; }
+.sheet-head .badge { width: 44px; height: 44px; border-radius: 12px; font-size: 14px; }
+.sheet-head h2 { font: 400 24px/1.25 var(--serif); letter-spacing: -.01em; margin: 6px 0 0; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.chips .tag:first-child { text-transform: uppercase; letter-spacing: .04em; }
+.close { width: 40px; min-height: 40px; padding: 0; border-radius: 50%; border: 0; background: var(--subtle); color: #475569;
+  display: flex; align-items: center; justify-content: center; flex: none; box-shadow: none; }
+.close:hover { background: var(--line-strong); }
+.sheet-body { padding: 20px 28px; overflow-y: auto; flex: 1; }
+.sheet-body > * + * { margin-top: 16px; }
+.sheet-body .eyebrow { margin: 0; font-size: 11px; }
+.sheet-body .linkrow { margin-bottom: -8px; }
+.sheet-body .read { margin: 0; min-height: 36px; font-size: 12px; }
+.sheet-body pre { margin-bottom: 0; }
+.context { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 16px; background: #f8fafc;
+  border: 1px solid var(--line-strong); font-size: 13px; line-height: 1.6; }
+.context svg.i { width: 28px; height: 28px; padding: 6px; border-radius: 8px; background: #fff; border: 1px solid var(--line-strong); color: #475569; }
+.context strong { color: var(--ink); }
+.evaluation { display: flex; gap: 14px; align-items: flex-start; padding: 16px; border-radius: 16px; border: 1px solid var(--purple-line);
+  background: linear-gradient(90deg, #faf5ff, #f5f7ff); }
+.evaluation .mark { width: 36px; height: 36px; border-radius: 10px; background: var(--purple); color: #fff; display: flex;
+  align-items: center; justify-content: center; flex: none; }
+.evaluation .eyebrow { color: var(--purple-ink); }
+.evaluation .notes { margin: 6px 0 0; font-size: 13px; color: var(--ink); }
+.sheet-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 28px;
+  background: #f8fafc; border-top: 1px solid var(--line-strong); flex: none; }
+.sheet-foot .actions { margin: 0; }
+.sheet-foot button { display: inline-flex; align-items: center; gap: 8px; }
+
 /* --- content of the other screens --- */
 .strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 0 0 8px; }
 .strip a { display: block; background: var(--card); border: 1px solid var(--line-strong); border-radius: 16px; padding: 16px 20px;
@@ -263,6 +301,9 @@ td { font-variant-numeric: tabular-nums; }
   .dock { position: static; padding: 0 16px 24px; background: none; }
   .pills a, .linkrow a { min-height: 44px; } .pills .state { margin-left: 0; width: 100%; }
   .kbd { display: none; }
+  .sheet-head, .sheet-body, .sheet-foot { padding-left: 16px; padding-right: 16px; }
+  .close { width: 44px; min-height: 44px; } .sheet-body .read { min-height: 44px; }
+  .sheet-foot, .sheet-foot .actions { flex-direction: column; align-items: stretch; } .sheet-foot button { justify-content: center; }
 }
 @media (prefers-reduced-motion: no-preference) {
   button, .rail a, .metric, .hero, .rows a { transition: background-color .15s ease-out, color .15s ease-out, box-shadow .15s ease-out; }
@@ -291,6 +332,10 @@ _ICONS = {
     "risk": '<path d="M12 4 2.5 20h19z"/><path d="M12 10v4M12 17h.01"/>',
     "brief": '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h4"/>',
     "creative": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/><circle cx="9" cy="9" r="1.5"/>',
+    "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+    "x": '<path d="M6 6l12 12M18 6 6 18"/>',
+    "check": '<path d="m5 12 5 5 9-10"/>',
+    "note": '<path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/>',
     "draft": '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13 7 4 4"/>',
 }
 
