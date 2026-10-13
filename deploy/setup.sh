@@ -47,7 +47,7 @@ for arg in "$@"; do
     case "$arg" in
       openai) names="OPENAI_API_KEY" ;; anthropic) names="ANTHROPIC_API_KEY" ;;
       groq) names="GROQ_API_KEY" ;; openrouter) names="OPENROUTER_API_KEY" ;;
-      canva) names="CANVA_CLIENT_ID CANVA_CLIENT_SECRET" ;; higgsfield) names="HIGGSFIELD_API_KEY" ;;
+      canva) names="CANVA_CLIENT_ID CANVA_CLIENT_SECRET" ;; higgsfield) names="HIGGSFIELD_API_KEY_ID HIGGSFIELD_API_KEY_SECRET" ;;
       *) echo "Unknown service '$arg'. Use openai, anthropic, groq, openrouter, canva or higgsfield."; exit 1 ;;
     esac
     for name in $names; do

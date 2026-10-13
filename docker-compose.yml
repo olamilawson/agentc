@@ -31,7 +31,10 @@ services:
       # Connectors (src/personal_agent/connectors.py). Empty: not connected.
       CANVA_CLIENT_ID: ${CANVA_CLIENT_ID:-}
       CANVA_CLIENT_SECRET: ${CANVA_CLIENT_SECRET:-}
-      HIGGSFIELD_API_KEY: ${HIGGSFIELD_API_KEY:-}
+      HIGGSFIELD_API_KEY_ID: ${HIGGSFIELD_API_KEY_ID:-}
+      HIGGSFIELD_API_KEY_SECRET: ${HIGGSFIELD_API_KEY_SECRET:-}
+      # Where Canva sends you back after you sign in to it.
+      PERSONAL_AGENT_PUBLIC_URL: ${PERSONAL_AGENT_PUBLIC_URL:-https://ijeoma.pro}
       # Set by ./deploy/setup.sh --local-model once Ollama runs on this server.
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-}
       PERSONAL_AGENT_N8N_SECRET: ${PERSONAL_AGENT_N8N_SECRET:-}

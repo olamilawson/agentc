@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from personal_agent.api import dispatches, ui, workspace
+from personal_agent.api import dispatches, studio, ui, workspace
 from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
@@ -1263,7 +1263,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             f"""<tr><td><strong>{escape(c["label"])}</strong><br/><span class="meta">{escape(c["state"])}.</span></td><td>"""
             + "<br/>".join(f"<code>{escape(name)}</code> ({cls}): {escape(does)}" for name, cls, does in c["tools"])
             + "</td></tr>"
-            for c in connectors.status()
+            for c in connectors.status(db)
         )
         def job_line(last: dict | None) -> str:
             if last is None:
@@ -1337,8 +1337,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <p class="meta">The server runs these by itself. Backups stay on the server for 14 days; a copy off the server needs a
  destination and a key (<code>deploy/backup.sh</code>). <code>./deploy/restore.sh</code> on the server returns the agent to a backup.</p>
 <h2 id="connectors">Connectors</h2>
-<p class="lede">Outside creative services the agent will use. Each is a shell for now: its tools exist and obey the same
- approval rules as mail, and no workflow calls them yet.</p>
+<p class="lede">Outside creative services. You use them on the <a href="/studio">Studio</a> screen; what they make is saved
+ to the workstream's folder or stays in your own Canva account.</p>
 <div class="tablewrap"><table><tr><th>Service</th><th>Tools it will offer</th></tr>{plugins}</table></div>
 <h2 id="mailbox">Mailbox and calendar</h2>
 {mailbox_section}
@@ -1501,7 +1501,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         "brief-evaluation": ("Brief", "c-blue"), "strategy-drafting": ("Strategy", "c-purple"),
         "creative-review": ("Creative", "c-rose"), "sponsorship-triage": ("Sponsorship", "c-amber"),
         "call-change": ("Calls", "c-emerald"), "think": ("Think", "c-purple"),
-        "agency-dispatch": ("Dispatch", "c-emerald"),
+        "agency-dispatch": ("Dispatch", "c-emerald"), "studio": ("Studio", "c-purple"),
         **{name: (label, "c-purple") for name, label in skill_run.SKILLS.items()},
     }
     STATUS_WORDS = {
@@ -2022,6 +2022,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         sheet_script=SHEET_SCRIPT, cap_banner=_cap_banner, calls_today=_calls_today, fields=_fields, dock=_dock,
     )
     dispatches.install(app, settings=settings, db=db, engine=engine, render=render, ws_api=ws_api, dock=_dock)
+    studio.install(app, settings=settings, db=db, engine=engine, render=render, ws_api=ws_api, status_words=STATUS_WORDS)
     return app
 
 

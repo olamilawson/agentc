@@ -114,12 +114,16 @@ this repository implements **Delivery phase 1: Foundation**.
   model with one small call. Open-weight models run on the server through
   Ollama (`./deploy/setup.sh --local-model qwen2.5:3b`) or at a host such as
   Groq. `./deploy/setup.sh --key openai` saves a provider's key on the server.
-- **Connectors** — `src/personal_agent/connectors.py` holds shells for Canva
-  and Higgsfield. Their tools are registered with the tool gateway, so the
-  allowlist, client separation and approval rules already apply; each call
-  stops with a reason (not connected, not approved for a restricted client,
-  or not built). No workflow calls them yet. The setting names are
-  provisional until each account's API terms are confirmed.
+- **Connectors** — `src/personal_agent/connectors.py` calls Canva and
+  Higgsfield, from the Studio screen (`api/studio.py`, workflow `studio`).
+  Higgsfield: a prompt becomes an image or a video, polled until it is done
+  and saved to the workstream's folder. Canva: the owner signs in once
+  (OAuth with PKCE; the tokens are kept in the database and refreshed), and
+  the agent makes a design in that account or exports one to the folder.
+  Every tool is draft-class and goes through the tool gateway, so the
+  allowlist, client separation and restricted-client rules apply. Written
+  from the two published API references; neither has been run against a live
+  account. Setup is in `deploy/connectors.md`.
 - **Going live** — `deploy/go-live.md` is the checklist for ijeoma.pro on the
   Hostinger VPS. That server's own nginx holds ports 80 and 443 for several
   domains, so the app listens on `127.0.0.1:8100` and one nginx site

@@ -1,0 +1,9 @@
+# Connectors to outside creative services (src/personal_agent/connectors.py).
+#
+# Higgsfield offers a different set of models to each account. These are the
+# endpoints the agent posts to; change them to ones your account has. The paths
+# come from Higgsfield's API reference, after https://api.higgsfield.ai/.
+higgsfield:
+  endpoints:
+    image: higgsfield-ai/soul/v2/standard
+    video: wan/v2.7/text-to-video

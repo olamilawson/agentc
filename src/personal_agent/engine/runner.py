@@ -37,6 +37,7 @@ from personal_agent.engine.strategy_drafting import build_drafting_graph, drafti
 from personal_agent.engine.think import build_think_graph, think_contracts, think_outputs
 from personal_agent.engine import dispatch as agency_dispatch
 from personal_agent.engine import skill_run
+from personal_agent.engine import studio as studio_runs
 from personal_agent.graph_mail import GraphError, GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
@@ -139,8 +140,8 @@ class Harness:
         self.tools.register(ToolSpec(name="read_calendar", cls=ToolClass.READ, fn=self._read_calendar))
         # Release-class: an approved brief to an agency, with its files from the workstream's folder.
         self.tools.register(ToolSpec(name=agency_dispatch.TOOL, cls=ToolClass.RELEASE, fn=self._send_agency_brief))
-        # Canva and Higgsfield: shells that name their tools and refuse every call for now.
-        connectors.register(self.tools, self.db, self.settings)
+        # Canva and Higgsfield: draft-class tools that make something and save it to the client's folder.
+        connectors.register(self.tools, self.db, self.settings, self.clients)
         # Draft-class: a document in the run's own client folder (reversible).
         self.tools.register(
             ToolSpec(
@@ -323,6 +324,7 @@ WORKFLOWS: dict[str, Workflow] = {
     "think": Workflow(build_think_graph, think_outputs),
     # Each skill is a workflow of its own name, so the learning review reads it against its own rubric.
     **{name: Workflow(build, skill_run.skill_outputs, revises=True) for name, build in skill_run.builders().items()},
+    studio_runs.WORKFLOW: Workflow(studio_runs.build_studio_graph, studio_runs.studio_outputs),
     agency_dispatch.WORKFLOW: Workflow(
         agency_dispatch.build_dispatch_graph, agency_dispatch.dispatch_outputs, agency_dispatch.dispatch_rejected
     ),

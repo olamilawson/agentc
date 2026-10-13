@@ -211,6 +211,15 @@ signals = Table(
     Column("created_at", String),
 )
 
+# A connector's sign-in, kept so the owner signs in once. Canva's tokens live here.
+connector_tokens = Table(
+    "connector_tokens",
+    metadata,
+    Column("name", String, primary_key=True),
+    Column("data", JSON),
+    Column("updated_at", String),
+)
+
 # A brief approved for an agency. It is held until release_at, then sent; the
 # owner can recall it while it is held.
 dispatches = Table(
@@ -509,6 +518,21 @@ class Database:
 
     def delete_signal(self, signal_id: str) -> None:
         self._remove(signals, signal_id)
+
+    # --- connector sign-ins -----------------------------------------------------
+    def get_connector(self, name: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(select(connector_tokens.c.data).where(connector_tokens.c.name == name)).first()
+        return row[0] if row else None
+
+    def set_connector(self, name: str, data: dict) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(connector_tokens).where(connector_tokens.c.name == name))
+            cx.execute(insert(connector_tokens).values(name=name, data=data, updated_at=now()))
+
+    def delete_connector(self, name: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(connector_tokens).where(connector_tokens.c.name == name))
 
     # --- agency dispatches ----------------------------------------------------
     def create_dispatch(self, **fields) -> str:

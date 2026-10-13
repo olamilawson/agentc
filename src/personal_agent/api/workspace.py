@@ -32,7 +32,7 @@ DECISIONS = {"approved": ("Approved", "c-emerald"), "changes": ("Changes request
 FILTERS = (("open", "Open"), ("all", "All"), ("decisions", "Decisions"), ("risk", "At risk"), ("done", "Done"))
 DUE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 # Runs that are not items of work: a question on Think, and the agent's own weekly review.
-NOT_WORK = {"think", learning.WORKFLOW}
+NOT_WORK = {"think", "studio", learning.WORKFLOW}
 
 
 def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, sheet_script, cap_banner,
@@ -275,7 +275,8 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
 <p class="lede">One view of everything moving across your workstreams.</p>
 {ws_chips("/work", ws, f=f)}
 <div class="toolbar">{tabs("/work", ws, f)}
-  <span class="actions"><a class="button" href="/dispatch">{icon("arrow")}Agency dispatch</a>
+  <span class="actions"><a class="button" href="/studio">{icon("creative")}Studio</a>
+    <a class="button" href="/dispatch">{icon("arrow")}Agency dispatch</a>
     <a class="button approve" href="/new">{icon("spark")}Give the agent work</a></span></div>
 {new_task_form(path, ws)}
 <div class="board">{columns}</div>

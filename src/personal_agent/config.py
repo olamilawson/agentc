@@ -104,6 +104,10 @@ class Settings(BaseModel):
     workstreams: list[Workstream] = []
     # The models the Settings screen offers for each tier's route.
     model_catalogue: list[ModelChoice] = []
+    # Connector settings that are not secrets (config/connectors.yaml), such as Higgsfield's model endpoints.
+    connectors: dict = {}
+    # The site's own address, for a service that sends the owner back here after a sign-in.
+    public_url: str | None = None
     # Minutes an approved agency brief is held before it is sent; the owner can recall it in that time.
     dispatch_hold_minutes: int = 15
     # The name shown in the rail and the page titles.
@@ -160,6 +164,8 @@ def load_settings() -> Settings:
         workstreams=[Workstream(**w) for w in from_yaml("PERSONAL_AGENT_WORKSTREAMS", "workstreams.yaml").get("workstreams", [])],
         model_catalogue=[ModelChoice(**m) for m in catalogue],
         dispatch_hold_minutes=int(env("PERSONAL_AGENT_DISPATCH_HOLD_MINUTES") or 15),
+        connectors=from_yaml("PERSONAL_AGENT_CONNECTORS", "connectors.yaml"),
+        public_url=env("PERSONAL_AGENT_PUBLIC_URL") or None,
         brand_name=env("PERSONAL_AGENT_NAME") or "Chidimma OS",
         owner_name=env("PERSONAL_AGENT_OWNER_NAME") or "Chidimma",
         graph_tenant_id=env("MS_GRAPH_TENANT_ID") or None,
