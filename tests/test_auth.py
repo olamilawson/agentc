@@ -64,6 +64,9 @@ def test_sign_in_page_asks_for_email_and_password_and_no_code(client):
     page = client.get("/login").text
     assert 'name="email"' in page and 'name="password"' in page
     assert 'name="code"' not in page and "authenticator" not in page
+    # The eye: hidden until its script runs, and the field goes back to hidden text as the form is sent.
+    assert '<button type="button" id="reveal" aria-label="Show the password" aria-pressed="false" hidden>' in page
+    assert 'type="password" name="password"' in page and "addEventListener('submit', function () { set(false); })" in page
     assert '<span class="mark"><svg viewBox="0 0 256 256"' in page and 'href="/static/brand/favicon.svg"' in page  # the mark
 
 

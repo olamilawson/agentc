@@ -425,6 +425,14 @@ td { font-variant-numeric: tabular-nums; }
 .signin h1 { text-transform: uppercase; font: 600 20px var(--sans); letter-spacing: .05em; }
 .signin form { flex-direction: column; align-items: stretch; gap: 16px; margin-top: 24px; }
 .signin label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
+.secret { position: relative; display: block; }
+.secret input { width: 100%; padding-right: 52px; }
+.secret button { position: absolute; top: 0; right: 0; width: 48px; min-height: 44px; height: 100%; padding: 0; border: 0; background: none;
+  box-shadow: none; color: var(--muted); display: flex; align-items: center; justify-content: center; border-radius: 12px; }
+.secret button:hover { background: none; color: var(--ink); }
+.secret button svg.i { width: 18px; height: 18px; }
+.secret .eye-off, .secret button[aria-pressed="true"] .eye { display: none; }
+.secret button[aria-pressed="true"] .eye-off { display: block; }
 
 /* Phone width: the rail becomes a bar across the top, and nothing scrolls sideways. */
 @media (max-width: 1100px) { .columns, .columns.two, .columns.think, form.route { grid-template-columns: 1fr; }
@@ -493,6 +501,8 @@ _ICONS = {
     "think": '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.8.8 1.2 1.6 1.4 2.5h5.2c.2-.9.6-1.7 1.4-2.5A6 6 0 0 0 12 3z"/>',
     "intelligence": '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     "back": '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+    "eye": '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    "eye-off": '<path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.5 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
     "moon": '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
     "draft": '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13 7 4 4"/>',
 }
@@ -531,6 +541,24 @@ THEME_SCRIPT = """<script>
     try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch (e) {}
     label();
   });
+})();
+</script>"""
+
+
+# The eye on the sign-in page. It shows only when scripts run, since without one it could do nothing.
+# The password is hidden again as the form is sent, so a browser never keeps it as plain text.
+REVEAL_SCRIPT = """<script>
+(function () {
+  var field = document.getElementById('password'), button = document.getElementById('reveal');
+  if (!field || !button) return;
+  button.hidden = false;
+  function set(shown) {
+    field.type = shown ? 'text' : 'password';
+    button.setAttribute('aria-pressed', shown ? 'true' : 'false');
+    button.setAttribute('aria-label', shown ? 'Hide the password' : 'Show the password');
+  }
+  button.addEventListener('click', function () { set(field.type === 'password'); field.focus(); });
+  field.form.addEventListener('submit', function () { set(false); });
 })();
 </script>"""
 
@@ -652,11 +680,15 @@ def sign_in_page(brand: str, message: str = "", next_path: str = "/", with_code:
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{escape(next_path)}"/>
     <label>Email <input type="email" name="email" autocomplete="username" required autofocus/></label>
-    <label>Password <input type="password" name="password" autocomplete="current-password" required/></label>
+    <label>Password
+      <span class="secret"><input type="password" name="password" id="password" autocomplete="current-password" required/>
+        <button type="button" id="reveal" aria-label="Show the password" aria-pressed="false" hidden>
+          <span class="eye">{icon("eye")}</span><span class="eye-off">{icon("eye-off")}</span></button></span></label>
     {code}
     <button class="approve">Sign in</button>
   </form>
 </main>
+{REVEAL_SCRIPT}
 </body></html>"""
 
 
