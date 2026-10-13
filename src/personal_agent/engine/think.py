@@ -85,7 +85,7 @@ def build_think_graph(h):
         payload = {"question": inputs.get("question", ""), "material": material}
         tracker = BudgetTracker(h.settings.budgets)
         context, flags = build_context(
-            ROLE, "", [], [("pasted material", material)] if material else [],
+            ROLE + h.standing(state["client"]), "", [], [("pasted material", material)] if material else [],
             {"question": payload["question"], "client": state["client"]},
         )
         runner = h.node_runner(tracker, state["run_id"])

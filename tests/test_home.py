@@ -17,7 +17,8 @@ def test_an_empty_home_greets_the_owner_and_says_nothing_waits(settings, monkeyp
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     page = _client(settings).get("/").text
     assert ", Chidimma.</h1>" in page and "CHIDIMMA OS" not in page  # the name is upper-cased by the stylesheet
-    assert "Nothing is waiting on you." in page and "No item needs your decision." in page
+    assert 'class="hero clear"' in page and "All caught up" in page
+    assert "Nothing is waiting on you." in page and "No open item." in page and "No signal on the watchlist yet." in page
     assert "Calendar not connected" in page and "No call is scheduled." in page
     assert "No OPENAI_API_KEY on the server yet" in page
     assert "No clients yet." in page
@@ -26,7 +27,7 @@ def test_an_empty_home_greets_the_owner_and_says_nothing_waits(settings, monkeyp
     assert "http://" not in page and "https://" not in page  # no outside host: fonts and icons ship with the app
 
 
-def test_home_shows_the_waiting_item_the_client_and_the_recent_run(settings, monkeypatch):
+def test_home_shows_the_waiting_item_and_its_workstream(settings, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
     client = _client(settings, extract_fields=[RECORD], score_by_rubric=[SCORES], draft_assessment=[ASSESSMENT],
                      verify_evidence=[VERDICTS_OK])
@@ -37,7 +38,6 @@ def test_home_shows_the_waiting_item_the_client_and_the_recent_run(settings, mon
     assert "For Acme Bank. Open it to read it and decide." in page
     assert page.count(f'href="/queue#d-{run_id}"') == 2  # My view and the priority both open its sheet
     assert '<span class="tag c-blue">Brief</span>' in page
-    assert f'href="/inspect/{run_id}"' in page and "waiting for you" in page
     assert '<span>Acme Bank</span>' in page and ">AB</span>" in page  # the client is a workstream in the rail
     assert '<span class="count" aria-label="1 waiting">1</span>' in page
     assert "Model key set" in page and "test-key" not in page
@@ -70,6 +70,8 @@ def test_a_decision_from_the_sheet_returns_the_browser_to_review(settings):
     run_id = sent.headers["location"].rsplit("/", 1)[1]
     back = client.post(f"/runs/{run_id}/approval", data={"decision": "rejected", "comment": "Not this quarter."},
                        headers={"accept": "text/html"})
-    assert back.status_code == 303 and back.headers["location"] == "/queue"
+    assert back.status_code == 303 and back.headers["location"].startswith("/queue?done=")
+    confirmed = client.get(back.headers["location"]).text
+    assert "Declined · recorded" in confirmed and "Kept in Memory with your reason." in confirmed
     assert client.get(f"/runs/{run_id}").json()["status"] != "waiting_for_approval"
     assert "No item needs your decision." in client.get("/queue").text

@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from personal_agent.api import ui
+from personal_agent.api import ui, workspace
 from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
@@ -201,6 +201,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 
     app = FastAPI(title="Personal Agent", version="0.1.0 (foundation)")
     app.state.engine = engine
+    # The owner's workstreams, created once. One the owner later deletes stays deleted.
+    ui.STREAM_COLOURS.update({w.name: w.colour for w in settings.workstreams if w.colour})
+    if settings.workstreams and not db.audited_since("workstreams_seeded", ""):
+        for stream in settings.workstreams:
+            engine.harness.clients.ensure(stream.name)
+        db.audit(None, "workstreams_seeded", {"names": [w.name for w in settings.workstreams]})
 
     # --- sign-in ----------------------------------------------------------------------
     # With the owner's email, password hash and session secret set, every route needs a session except the
@@ -285,7 +291,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         waiting = len(db.list_runs(status="waiting_for_approval")) + len(db.list_runs(status="waiting_for_input"))
         today = datetime.now(_zone())
         return ui.page(
-            title, active, body, brand=settings.brand_name, waiting=waiting, today_count=waiting + len(_calls_today()),
+            title, active, body, brand=settings.brand_name, waiting=waiting, today_count=ws_api.open_count(),
             signed_in=guard is not None, script=script, refresh=refresh, dock=dock,
             clients=engine.harness.clients.list_clients(), today=f"{today:%A}, {today.day} {today:%B %Y}",
         )
@@ -502,12 +508,22 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 edited_body=(str(form["edited_body"]).replace("\r\n", "\n") if "edited_body" in form else None),
             )
         try:
+            subject = engine.pending_approval(run_id)["content"].get("subject")
+        except Exception:  # not waiting, or unknown: approve() below reports it
+            subject = None
+        try:
             result = engine.approve(run_id, body.decision, body.comment, body.edited_body)
         except KeyError:
             raise HTTPException(404, "run not found")
         except ValueError as e:
             raise HTTPException(409, str(e))
-        return _back_to_review(request) or result
+        run = db.get_run(run_id)
+        decision_id = db.record_decision(
+            run["client"], subject or _kind(run["workflow"]),
+            {"approved": "approved", "sent_back": "changes", "rejected": "declined"}[body.decision],
+            body.comment, "run", run_id,
+        )
+        return _back_to(request, f"/queue?done={decision_id}") or result
 
     @app.get("/inputs/pending")
     def pending_inputs() -> list[dict]:
@@ -678,8 +694,9 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             f'<p class="banner" role="status">The server has no {escape(" or ".join(missing))} yet, so a run stops at '
             "its first model step. Add the key to <code>.env</code> on the server and restart.</p>" if missing else ""
         )
-        return render("New work", "new", f"""
-<h1>New work</h1>
+        return render("Agent work", "work", f"""
+<p class="crumb"><a href="/work">Work</a> / Agent work</p>
+<h1>Agent work</h1>
 <p class="lede">Give the agent a piece of work. It prepares a draft and puts it in Review for your decision.
  Sponsorship enquiries arrive by mail and need nothing from you here.</p>
 {f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
@@ -1209,7 +1226,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             raise HTTPException(409, str(e))
 
     @app.get("/library", response_class=HTMLResponse)
-    def library_page() -> str:
+    def library_page(ws: str = "") -> str:
+        ws = ws_api.known(ws)
         version, library = load_library(settings.skills_dir)
         cards = []
         for p in map(_proposal_view, db.list_proposals(status="pending")):
@@ -1270,7 +1288,14 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             for name, text in sorted(library.items())
         )
         return render("Memory & decisions", "library", f"""
+<p class="crumb">{escape(settings.brand_name)} / Memory</p>
 <h1>Memory &amp; decisions</h1>
+<p class="lede">Remember the decision. Remember why.</p>
+{ws_api.ws_chips("/library", ws)}
+<nav class="tabs" aria-label="Sections"><a href="#decisions">Decisions</a><a href="#context">Context</a>
+ <a href="#drafts">Drafts</a><a href="#rules">Working rules</a><a href="#activity">Activity</a></nav>
+{ws_api.memory_sections(ws)}
+<h2 id="rules">Working rules</h2>
 <p class="lede">The agent cannot edit these files. The learning review proposes a change here, and it takes
  effect once you accept it. An accepted change stays through every update to the app.</p>
 <p class="meta">library version <code>{version[:12]}</code></p>
@@ -1281,6 +1306,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 {report}
 <h2>Skills</h2>
 {files}
+{ws_api.activity()}
 """)
 
     # --- home -------------------------------------------------------------------------
@@ -1299,43 +1325,58 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         icon = ui.icon
         hour = datetime.now(_zone()).hour
         part = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
-        waiting = [
-            (item["content"].get("subject") or "Draft for your approval", item) for item in engine.queue()
-        ] + [("Questions before drafting", ask) for ask in engine.input_requests()]
-        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
-        failed = sum(r["created_at"] >= week_ago for r in db.list_runs(status="failed"))
+        open_items = [i for i in ws_api.items() if i["status"] != "done"]
+        waiting = [i for i in open_items if i["status"] == "awaiting_approval"]
+        at_risk = [i for i in open_items if i["risk"] == "high"]
+        # What waits for the owner comes first, then what is at risk, then by time due.
+        ranked = sorted(open_items, key=lambda i: (i["status"] != "awaiting_approval", i["risk"] != "high"))
+        signals = ws_api.signal_list()
+        reputation = sum(s["kind"] == "reputation" for s in signals)
         moment = datetime.now(timezone.utc).isoformat(timespec="minutes")
         ahead = sorted(
             (c for c in db.list_calls() if c["status"] == "scheduled" and c["start"] > moment), key=lambda c: c["start"]
         )
 
-        if waiting:
-            title, first = waiting[0]
-            view = (title, f"For {first['client']}. Open it to read it and decide.", f"/queue#d-{first['run_id']}")
-        else:
-            view = ("Nothing is waiting on you.", "Start a piece of work and the draft comes back here.", "/new")
+        def link(item: dict) -> str:
+            # A task's own sheet lives on the Work screen.
+            return f'/work{item["href"]}' if item["href"].startswith("#") else item["href"]
 
-        def priority(n: int, title: str, item: dict) -> str:
-            label, colour = TAGS.get(item["workflow"], (item["workflow"], "c-slate"))
+        if ranked:
+            first = ranked[0]
+            why = ("Open it to read it and decide." if first["status"] == "awaiting_approval"
+                   else "It is at risk." if first["risk"] == "high" else "It is next in line.")
+            view = (first["title"], f"For {first['ws']}. {why}", link(first))
+        else:
+            view = ("Nothing is waiting on you.", "Add a task, or give the agent work, and it shows here.", "/work")
+        # What the owner decided today stays in view, struck through, as the Stitch screens show it.
+        since, _ = _day_bounds()
+        decided = "".join(
+            f'<li><a href="/library#decisions"><span class="lead"><span class="num c-emerald">{icon("check")}</span>'
+            f'<span><b class="struck">{escape(d["title"] or "")}</b><small>{escape(d["workstream"] or "")}</small></span></span>'
+            f'<span class="end">{ws_api.chip(workspace.DECISIONS.get(d["decision"], (d["decision"], "c-slate")))}</span></a></li>'
+            for d in db.list_decisions()[:3] if (d["created_at"] or "") >= since
+        )
+
+        def priority(n: int, item: dict) -> str:
+            label, colour = item["tag"] or workspace.STATUSES[item["status"]]
             return (
-                f'<li><a href="/queue#d-{item["run_id"]}"><span class="lead"><span class="num {colour}">{n}</span>'
-                f'<span><b>{escape(title)}</b><small>{escape(item["client"])}</small></span></span>'
+                f'<li><a href="{link(item)}"><span class="lead"><span class="num {colour}">{n}</span>'
+                f'<span><b>{escape(item["title"])}</b><small>{escape(item["ws"])}</small></span></span>'
                 f'<span class="end"><span class="tag {colour}">{escape(label)}</span>{icon("chevron")}</span></a></li>'
             )
 
-        priorities = "".join(priority(n, title, item) for n, (title, item) in enumerate(waiting[:5], 1))
+        priorities = "".join(priority(n, item) for n, item in enumerate(ranked[:5], 1)) + decided
         calls = "".join(
             f'<li><a href="/calendar"><span class="lead"><span><b>{escape(c["subject"] or "Call")}</b>'
             f'<small>{escape(c["label"])} · with {escape(c["sender"])}</small></span></span>'
             f'<span class="end">{icon("chevron")}</span></a></li>'
             for c in ahead[:5]
         )
-        recent = "".join(
-            f'<li><a href="/inspect/{r["id"]}"><span class="lead"><span class="dot {escape(r["status"])}"></span>'
-            f'<span><b>{escape(TAGS.get(r["workflow"], (r["workflow"], ""))[0])} · {escape(r["client"])}</b>'
-            f'<small>{escape(STATUS_WORDS.get(r["status"], r["status"]))}</small></span></span>'
-            f'<span class="end">{icon("chevron")}</span></a></li>'
-            for r in db.list_runs()[:5]
+        watch = "".join(
+            f'<li><a href="/intelligence"><span class="lead"><span><b>{escape(s["title"])}</b>'
+            f'<small>{escape(s["workstream"])}</small></span></span>'
+            f'<span class="end">{ws_api.chip(workspace.SIGNALS.get(s["kind"], (s["kind"], "c-slate")))}</span></a></li>'
+            for s in signals[:4]
         )
         connected = engine.harness.mail is not None
         missing = _missing_model_keys()
@@ -1343,15 +1384,17 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         dock = f"""<div class="dock">
   <form action="/think" method="get" id="ask">
     <label for="ask-goal" style="position:absolute;left:-9999px">Ask a question</label>
-    <input type="text" id="ask-goal" placeholder="Ask a question" autocomplete="off" maxlength="2000"/>
+    <input type="text" id="ask-goal" placeholder="Ask {escape(settings.owner_name)} anything" autocomplete="off" maxlength="2000"/>
     <span class="kbd">Ctrl K</span>
     <button aria-label="Take this question to Think">{icon("up")}</button>
   </form>
+  <p class="assure">{icon("lock")}Your judgement stays in control. Each outside action waits for your review.</p>
   <div class="pills">
     <a href="/think">{icon("think")}Think</a>
     <a href="/new#brief">{icon("brief")}Evaluate a brief</a>
     <a href="/new#creative">{icon("creative")}Review creative work</a>
     <a href="/new#draft">{icon("draft")}Draft a document</a>
+    <a href="/library#context">{icon("memory")}Add to memory</a>
     <span class="state">{escape(key_state)}</span>
   </div>
 </div>"""
@@ -1359,32 +1402,33 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <h1>Good {part}, {escape(settings.owner_name)}.</h1>
 <p class="lede">Here's what matters today.</p>
 {_cap_banner()}
-<a class="hero" href="{view[2]}">
-  <span class="lead"><span class="disc purple">{icon("spark")}</span>
-    <span><span class="myview">My view</span><strong>{escape(view[0])}</strong><small>{escape(view[1])}</small></span></span>
+<a class="hero{"" if ranked else " clear"}" href="{view[2]}">
+  <span class="lead"><span class="disc {"purple" if ranked else "emerald"}">{icon("spark" if ranked else "check")}</span>
+    <span><span class="myview">{"My view" if ranked else "All caught up"}</span><strong>{escape(view[0])}</strong><small>{escape(view[1])}</small></span></span>
   <span class="go">{icon("chevron")}</span>
 </a>
 <div class="metrics">
   <a class="metric" href="/queue"><span class="lead"><span class="disc rose">{icon("decide")}</span>
     <span><b>{len(waiting)}</b><span>{"Decision" if len(waiting) == 1 else "Decisions"}</span><small>Need your input</small></span></span>{icon("chevron")}</a>
-  <a class="metric" href="/inspect?status=failed"><span class="lead"><span class="disc amber">{icon("risk")}</span>
-    <span><b>{failed}</b><span>Failed {"run" if failed == 1 else "runs"}</span><small>In the last 7 days</small></span></span>{icon("chevron")}</a>
-  <a class="metric" href="/calendar"><span class="lead"><span class="disc indigo">{icon("calls")}</span>
-    <span><b>{len(ahead)}</b><span>{"Call" if len(ahead) == 1 else "Calls"} ahead</span><small>In your calendar</small></span></span>{icon("chevron")}</a>
+  <a class="metric" href="/today?f=risk"><span class="lead"><span class="disc amber">{icon("risk")}</span>
+    <span><b>{len(at_risk)}</b><span>{"Item" if len(at_risk) == 1 else "Items"} at risk</span><small>Need attention</small></span></span>{icon("chevron")}</a>
+  <a class="metric" href="/intelligence?kind=reputation"><span class="lead"><span class="disc indigo">{icon("intelligence")}</span>
+    <span><b>{reputation}</b><span>Reputation {"signal" if reputation == 1 else "signals"}</span><small>On your watchlist</small></span></span>{icon("chevron")}</a>
 </div>
 <div class="columns">
   <section class="card">
-    <div class="linkrow"><h2>Top priorities</h2><a href="/queue">View all {icon("arrow")}</a></div>
-    {f'<ul class="rows">{priorities}</ul>' if priorities else '<p class="quiet">No item needs your decision.</p>'}
+    <div class="linkrow"><h2>Top priorities</h2><a href="/today">View all {icon("arrow")}</a></div>
+    {f'<ul class="rows">{priorities}</ul>' if priorities else '<p class="quiet">No open item. Add a task on Today.</p>'}
   </section>
   <section class="card">
-    <div class="linkrow"><h2>Calls ahead</h2><a href="/calendar">View all {icon("arrow")}</a></div>
+    <div class="linkrow"><h2>Calls ahead</h2><a href="/calendar">Calendar {icon("arrow")}</a></div>
     {"" if connected else '<p class="eyebrow">Calendar not connected</p>'}
     {f'<ul class="rows">{calls}</ul>' if calls else '<p class="quiet">No call is scheduled.</p>'}
   </section>
   <section class="card">
-    <div class="linkrow"><h2>Recent work</h2><a href="/inspect">View all {icon("arrow")}</a></div>
-    {f'<ul class="rows">{recent}</ul>' if recent else '<p class="quiet">No run yet. Start one below.</p>'}
+    <div class="linkrow"><h2>Intelligence</h2><a href="/intelligence">View all {icon("arrow")}</a></div>
+    <p class="eyebrow">Your watchlist · feed not connected</p>
+    {f'<ul class="rows">{watch}</ul>' if watch else '<p class="quiet">No signal on the watchlist yet.</p>'}
   </section>
 </div>
 """, script=DOCK_SCRIPT, dock=dock)
@@ -1418,63 +1462,24 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     def _kind(workflow: str) -> str:
         return TAGS.get(workflow, (workflow, ""))[0]
 
-    @app.get("/today", response_class=HTMLResponse)
-    def today_page() -> str:
-        since, _ = _day_bounds()
-        decide = [
-            (f'/queue#d-{item["run_id"]}', item["content"].get("subject") or "Draft for your approval",
-             f'{_kind(item["workflow"])} · {item["client"]}', "waiting_for_approval")
-            for item in engine.queue()
-        ] + [
-            (f'/queue#d-{ask["run_id"]}', "Questions before drafting", f'{_kind(ask["workflow"])} · {ask["client"]}',
-             "waiting_for_input")
-            for ask in engine.input_requests()
-        ]
-        calls = [("/calendar", c["subject"] or "Call", f'{c["label"]} · with {c["sender"]}', "") for c in _calls_today()]
-        every = db.list_runs()
-        working = [
-            (f'/inspect/{r["id"]}', f'{_kind(r["workflow"])} · {r["client"]}', STATUS_WORDS.get(r["status"], r["status"]), r["status"])
-            for r in every if r["status"] in ("running", "queued")
-        ]
-        closed = [r for r in every if r["status"] in ("done", "failed") and (r["updated_at"] or r["created_at"]) >= since]
-        finished = [
-            (f'/inspect/{r["id"]}', f'{_kind(r["workflow"])} · {r["client"]}',
-             (r["error_reason"] or "failed")[:140] if r["status"] == "failed" else "done", r["status"])
-            for r in closed
-        ]
-        connected = engine.harness.mail is not None
-        now = datetime.now(_zone())
-        return render("Today", "today", f"""
-<h1>Today</h1>
-<p class="lede">{now:%A}, {now.day} {now:%B}. The decisions that wait for you, the calls in your day, and the work the agent has in hand.</p>
-{_cap_banner()}
-<div class="columns two">
-  <section class="card">
-    <div class="linkrow"><h2>Decide</h2><a href="/queue">Open Review {ui.icon("arrow")}</a></div>
-    {_rows(decide, "No item needs your decision.")}
-  </section>
-  <section class="card">
-    <div class="linkrow"><h2>Calls today</h2><a href="/calendar">All calls {ui.icon("arrow")}</a></div>
-    {"" if connected else '<p class="eyebrow">Calendar not connected</p>'}
-    {_rows(calls, "No call is scheduled for today.")}
-  </section>
-  <section class="card">
-    <div class="linkrow"><h2>In hand</h2><a href="/new">Start work {ui.icon("arrow")}</a></div>
-    {_rows(working, "The agent is working on no run at this moment.")}
-  </section>
-  <section class="card">
-    <div class="linkrow"><h2>Finished today</h2><a href="/inspect">All runs {ui.icon("arrow")}</a></div>
-    {_rows(finished, "No run has finished today.")}
-  </section>
-</div>
-""", refresh=8 if working else 0)
-
     # --- think ------------------------------------------------------------------------
     NO_CLIENT = "General"
     DEPTH_WORDS = {"quick": "Quick", "considered": "Considered", "deep": "Deep"}
 
+    # The fifteen repeatable workflows the owner names. Those with an agent workflow behind
+    # them open it; the others start a Think question, which is what the agent can do for them today.
+    SKILL_LIST = (
+        ("Campaign Review", None), ("Creative Review", "/new#creative"), ("Copy Review", None),
+        ("Strategic Recommendation", "/new#draft"), ("Proposal Review", None), ("Approval Memo", "/new#draft"),
+        ("Executive Email", None), ("Reputation Assessment", None), ("Media Summary", None),
+        ("Competitor Analysis", None), ("Marketing Brief", "/new#brief"), ("Executive Update", None),
+        ("Research Synthesis", None), ("Task Prioritisation", None), ("Follow-up Management", None),
+    )
+    STARTERS = ("What needs my attention in this workstream?", "Challenge this campaign idea.",
+                "Help me prepare a strategic recommendation.")
+
     @app.get("/think", response_class=HTMLResponse)
-    def think_page(notice: str = "", wait: str = "") -> str:
+    def think_page(notice: str = "", wait: str = "", start: str = "") -> str:
         names = [n for n in engine.harness.clients.list_clients() if n != NO_CLIENT]
         options = "".join(f'<option value="{escape(n)}">{escape(n)}</option>' for n in names)
         depths = "".join(
@@ -1511,27 +1516,57 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
   <button type="button" class="read" hidden>Read aloud</button>
   {body}
   <p class="meta"><a href="/inspect/{r["id"]}">How the agent got here</a> · ${r["cost_usd"] or 0:.4f}</p>
+  {f'<form method="post" action="/think/{r["id"]}/save"><button>Save to memory</button></form>' if out.get("answer") else ""}
 </section>""")
         waiting = any(r["id"] == wait and r["status"] in ("queued", "running") for r in past)
+        starters = "".join(
+            f'<a href="/think?start={quote(text)}">{escape(text)}</a>' for text in STARTERS
+        )
+        lens = "".join(f"<li>{escape(q)}</li>" for q in settings.core.lens)
+        skill_links = "".join(
+            f'<li><a href="{href or "/think?start=" + quote(name + ": ")}"><span class="lead"><span><b>{name}</b>'
+            f'<small>{"Agent workflow" if href else "Starts a question here"}</small></span></span>'
+            f'<span class="end">{ui.icon("chevron")}</span></a></li>'
+            for name, href in SKILL_LIST
+        )
         return render("Think", "think", f"""
-<h1>Think</h1>
-<p class="lede">Ask a question and read the answer here. The agent reasons from your question and from the material you paste.
- It reads no web page and no file, and it sends nothing to anyone.</p>
+<p class="crumb">{escape(settings.brand_name)} / Think</p>
+<h1>Let's think this through.</h1>
+<p class="lede">A quiet space for sharper thinking. The agent reasons from your question, the material you paste and what
+ you have recorded about the workstream. It reads no web page and no file, and it sends nothing to anyone.</p>
 {f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
 {no_key}
+<div class="columns think">
+<div>
 <section class="card">
+  <p class="eyebrow">A good place to start</p>
+  <nav class="filters">{starters}</nav>
   <form method="post" action="/think" class="stack">
-    <label>Your question <textarea name="question" rows="4" maxlength="8000" required></textarea></label>
+    <label>Your question <textarea name="question" rows="4" maxlength="8000" required>{escape(start[:500])}</textarea></label>
     <label>Material to reason from <span class="or">optional: paste a note, a mail, figures</span>
       <textarea name="material" rows="4" maxlength="100000"></textarea></label>
     <label>Depth, and the model that answers
       <select name="depth">{depths}</select></label>
-    <label>Client <span class="or">a restricted client's question goes to approved providers alone</span>
-      <select name="client"><option value="">No client</option>{options}</select></label>
+    <label>Context <span class="or">the agent reads this workstream's knowledge and no other's</span>
+      <select name="client"><option value="">No workstream</option>{options}</select></label>
     <button class="approve">Ask this question</button>
   </form>
 </section>
 {"<h2>Answers</h2>" + "".join(cards) if cards else ""}
+</div>
+<aside>
+<section class="card">
+  <div class="linkrow"><h2>The {escape(settings.owner_name)} lens</h2></div>
+  <p class="quiet">Good thinking should survive scrutiny. Each answer is tested against these.</p>
+  {f'<ul class="notes">{lens}</ul>' if lens else ""}
+</section>
+<section class="card">
+  <div class="linkrow"><h2>Skill library</h2><a href="/library#rules">The rules {ui.icon("arrow")}</a></div>
+  <p class="quiet">{len(SKILL_LIST)} repeatable workflows. One shared standard.</p>
+  <ul class="rows">{skill_links}</ul>
+</section>
+</aside>
+</div>
 """, script=GOAL_SCRIPT + READ_ALOUD_SCRIPT, refresh=4 if waiting else 0)
 
     @app.post("/think")
@@ -1557,7 +1592,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 
     # --- intelligence -----------------------------------------------------------------
     @app.get("/intelligence", response_class=HTMLResponse)
-    def intelligence_page() -> str:
+    def intelligence_page(ws: str = "", kind: str = "all") -> str:
+        ws, kind = ws_api.known(ws), kind if kind in workspace.SIGNALS else "all"
         now = datetime.now(timezone.utc)
         # The end sits a minute ahead, so a decision made this second is inside the period.
         since = (now - timedelta(days=30)).isoformat(timespec="seconds")
@@ -1582,9 +1618,13 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             for name, r in sorted(report.items())
         )
         return render("Intelligence", "intelligence", f"""
+<p class="crumb">{escape(settings.brand_name)} / Intelligence</p>
 <h1>Intelligence</h1>
-<p class="lede">The last 30 days, read from the agent's own records: your decisions, the enquiries that came in, and the
- changes the agent proposes to its working rules.</p>
+<p class="lede">What changed. Why it matters. What happens next.</p>
+{ws_api.watchlist(ws, kind)}
+<h2>From the agent's records</h2>
+<p class="lede">The last 30 days: your decisions, the enquiries that came in, and the changes the agent proposes to its
+ working rules.</p>
 <div class="metrics">
   <a class="metric" href="/inspect"><span class="lead"><span class="disc rose">{ui.icon("decide")}</span>
     <span><b>{decisions}</b><span>{"Decision" if decisions == 1 else "Decisions"} you made</span>
@@ -1596,27 +1636,32 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <span><b>{len(proposals)}</b><span>Proposed {"change" if len(proposals) == 1 else "changes"} to the rules</span>
     <small>From the weekly review, for you to accept or decline</small></span></span>{ui.icon("chevron")}</a>
 </div>
-<div class="columns two">
+<div class="columns one">
   <section class="card">
     <div class="linkrow"><h2>By kind of work</h2><a href="/cost">Cost in full {ui.icon("arrow")}</a></div>
     {f'<div class="tablewrap"><table><tr><th>Work</th><th>Runs</th><th>Failed</th><th>Approved</th><th>Edited</th><th>Sent back</th><th>Rejected</th><th>Cost</th></tr>{table}</table></div>'
       if table else '<p class="quiet">No run in the last 30 days.</p>'}
     <p class="meta">This month so far: ${spend["total_usd"]:.2f} across {plural(spend["runs"], "run")}.</p>
   </section>
-  <section class="card">
-    <div class="linkrow"><h2>Outside signals</h2></div>
-    <p class="eyebrow">No source connected</p>
-    <p class="quiet">Reputation, regulation and market watching need a news or monitoring source. The agent has none
-     yet, so this card shows no item. It invents none.</p>
-  </section>
 </div>
 """)
 
     @app.get("/queue", response_class=HTMLResponse)
-    def queue_page() -> str:
+    def queue_page(ws: str = "", done: str = "") -> str:
         icon = ui.icon
-        approvals, asks = engine.queue(), engine.input_requests()
-        total = len(approvals) + len(asks)
+        ws = ws_api.known(ws)
+        made = next((d for d in db.list_decisions()[:20] if d["id"] == done), None) if done else None
+        toast = (
+            f"""<div class="toast" role="status"><span class="disc emerald">{icon("check")}</span>
+  <span class="grow"><span class="eyebrow">{escape(workspace.DECISIONS.get(made["decision"], (made["decision"], ""))[0])} · recorded</span>
+    <strong>{escape(made["title"] or "")}</strong>
+    <small>{"Kept in Memory with your reason." if made["reason"] else "Kept in Memory. You gave no reason."}</small></span>
+  <a href="/library#decisions">View in Memory</a></div>""" if made else ""
+        )
+        approvals = [a for a in engine.queue() if not ws or a["client"] == ws]
+        asks = [a for a in engine.input_requests() if not ws or a["client"] == ws]
+        task_items, task_sheets = ws_api.decision_sheets(ws)
+        total = len(approvals) + len(asks) + len(task_items)
         mailbox = engine.harness.mail is not None
 
         def head(n: int, run: dict, title: str) -> str:
@@ -1681,7 +1726,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <pre class="say">{escape(content.get("body", ""))}</pre>
     {edit}
     <form method="post" action="/runs/{run_id}/approval" id="f-{run_id}" class="stack">
-      <label class="eyebrow" for="c-{run_id}">Change to make, or reason for rejecting (optional)</label>
+      <label class="eyebrow" for="c-{run_id}">Why this decision? The change to make, or your reason</label>
       <textarea id="c-{run_id}" name="comment" rows="2" maxlength="4000"></textarea>
     </form>
     <p class="meta">Your approval covers this content: <code>{item["content_hash"][:16]}</code> · run {run_id}</p>
@@ -1721,6 +1766,9 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             label, colour = TAGS.get(ask["workflow"], (ask["workflow"], "c-slate"))
             rows.append((run_id, "Questions before drafting", ask["client"], label, colour))
 
+        for item in task_items:
+            rows.append((f"t{item['task']}", item["title"], item["ws"], "Task", "c-slate"))
+        sheets.append(task_sheets)
         listing = "".join(
             f'<li><a href="#d-{run_id}" data-open="d-{run_id}"><span class="lead"><span class="num {colour}">{n}</span>'
             f'<span><b>{escape(title)}</b><small>{escape(client)}</small></span></span>'
@@ -1730,15 +1778,19 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
         failed = sum(r["created_at"] >= week_ago for r in db.list_runs(status="failed"))
         waiting = (
-            f'<section class="card"><div class="linkrow"><h2>Waiting for you</h2></div><ul class="rows">{listing}</ul></section>'
+            f'<section class="card"><div class="linkrow"><h2>{plural(len(rows), "decision")} pending</h2>'
+            f'<span class="eyebrow">Review the evidence. Make the call. Keep the reason.</span></div><ul class="rows">{listing}</ul></section>'
             if rows else
-            '<p>No item needs your decision. Start something on the <a href="/new">New work</a> screen; '
-            "it comes back here once the agent has a draft for you.</p>"
+            '<p>No item needs your decision. Give the agent work on the <a href="/new">Agent work</a> screen, or move a task '
+            "to Awaiting approval; it comes here for your call.</p>"
         )
         return render("Review", "queue", f"""
+<p class="crumb">{escape(settings.brand_name)} / Review</p>
 <h1>Review</h1>
-<p class="lede">Each item below waits for your decision. Open one to read the full content before you release it.</p>
+<p class="lede">Your judgement. With the context to make it count.</p>
+{toast}
 {_cap_banner()}
+{ws_api.ws_chips("/queue", ws)}
 <div class="strip">
   <a href="/queue"><strong>{len(approvals)}</strong>{"approval" if len(approvals) == 1 else "approvals"} waiting</a>
   <a href="/queue"><strong>{len(asks)}</strong>{"run" if len(asks) == 1 else "runs"} with questions for you</a>
@@ -1748,6 +1800,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 {"".join(sheets)}
 """, script=SHEET_SCRIPT + READ_ALOUD_SCRIPT)
 
+    ws_api = workspace.install(
+        app, settings=settings, db=db, engine=engine, render=render, tags=TAGS, status_words=STATUS_WORDS,
+        sheet_script=SHEET_SCRIPT, cap_banner=_cap_banner, calls_today=_calls_today, fields=_fields,
+    )
     return app
 
 

@@ -59,6 +59,24 @@ class Harness:
     tools: ToolGateway = field(init=False)
     clients: ClientStore = field(init=False)
 
+    def standing(self, client: str | None) -> str:
+        """What the owner has laid down, for every model step: the Core principles,
+        and what the owner has recorded about this workstream. Owner-written, so it
+        travels as instruction, never as outside material."""
+        parts = []
+        core = self.settings.core
+        if core.principles:
+            parts.append("# The owner's principles\n" + "\n".join(f"- {p}" for p in core.principles))
+        if core.lens:
+            parts.append("# Test your output against these before you return it\n" + "\n".join(f"- {q}" for q in core.lens))
+        notes = [m for m in self.db.list_memory(client) if m["kind"] != "draft"] if client else []
+        if notes:
+            parts.append(
+                f"# What the owner has recorded about {client}\n"
+                + "\n".join(f"- ({m['kind'].replace('_', ' ')}) {m['text']}" for m in reversed(notes[:40]))
+            )
+        return ("\n\n" + "\n\n".join(parts)) if parts else ""
+
     def __post_init__(self):
         self.tools = ToolGateway(self.db)
         self.clients = ClientStore(self.settings.clients_dir, self.db)

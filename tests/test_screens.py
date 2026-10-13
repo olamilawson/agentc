@@ -67,12 +67,11 @@ def test_depth_picks_the_tier_whose_model_answers(settings):
 def test_today_lists_the_waiting_decision_and_counts_it_in_the_rail(settings):
     client = _client(settings, extract_fields=[RECORD], score_by_rubric=[SCORES], draft_assessment=[ASSESSMENT],
                      verify_evidence=[VERDICTS_OK])
-    empty = client.get("/today").text
-    assert "No item needs your decision." in empty and "No call is scheduled for today." in empty
+    assert "No item here." in client.get("/today").text
     sent = client.post("/new", data={"workflow": "brief-evaluation", "client_new": "Acme Bank", "brief_text": BRIEF})
     run_id = sent.headers["location"].rsplit("/", 1)[1]
     page = client.get("/today").text
-    assert f'href="/queue#d-{run_id}"' in page and "Brief · Acme Bank" in page
+    assert f'href="/queue#d-{run_id}"' in page and "Acme Bank · Agent" in page and "Awaiting approval" in page
     assert 'aria-label="1 today">1</span>' in page
 
 
@@ -85,7 +84,7 @@ def test_intelligence_reports_the_owners_decisions_and_invents_no_outside_signal
     page = client.get("/intelligence").text
     assert "<b>1</b><span>Decision you made</span>" in page and "Approved 1 of 1" in page
     assert "<td>Brief</td><td>1</td>" in page
-    assert "No source connected" in page
+    assert "Live monitoring is not connected" in page
 
 
 # --- the model selector -----------------------------------------------------------------

@@ -1,0 +1,14 @@
+# The owner's workstreams. Each is created once, as a client folder, the first
+# time the app starts with this file. Deleting one on the Clients screen keeps it
+# deleted. The colour is the square beside its name; each carries white initials
+# at a contrast of 3:1 or better.
+workstreams:
+  - {name: "Sterling Bank", colour: "#e11d48"}
+  - {name: "SFHCO", colour: "#0284c7"}
+  - {name: "AltBank", colour: "#059669"}
+  - {name: "MBN", colour: "#b45309"}
+  - {name: "Fine Friction", colour: "#475569"}
+  - {name: "Bombell", colour: "#7c3aed"}
+  - {name: "Gistbird", colour: "#0369a1"}
+  - {name: "Personal Brand", colour: "#c2410c"}
+  - {name: "New Ventures", colour: "#4d7c0f"}

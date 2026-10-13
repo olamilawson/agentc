@@ -27,7 +27,8 @@ def run_model(
     prior = state.get("usage") or {}
     tracker.add_usage(prior.get("tokens_in", 0), prior.get("tokens_out", 0), prior.get("cost_usd", 0.0))
     context, _ = build_context(
-        ROLE, rubric, examples or [], untrusted, {k: v for k, v in payload.items() if k not in hide}
+        ROLE + h.standing(state.get("client")), rubric, examples or [], untrusted,
+        {k: v for k, v in payload.items() if k not in hide},
     )
     runner = h.node_runner(tracker, state.get("run_id"))
     out = runner.run(h.contracts[node], payload, context=context, images=images)

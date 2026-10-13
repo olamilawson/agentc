@@ -20,6 +20,7 @@ here as small inline SVGs in the outline style the screens use.
 from __future__ import annotations
 
 from html import escape
+from urllib.parse import quote
 
 _LATIN = ("U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,"
           "U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD")
@@ -65,8 +66,11 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .rail { position: fixed; inset: 0 auto 0 0; width: 256px; background: var(--rail); color: var(--rail-text);
   display: flex; flex-direction: column; border-right: 1px solid var(--rail-line); }
 .rail :focus-visible { outline-color: #c4b5fd; }
-.brand { padding: 24px 24px 16px; color: #fff; font-size: 17px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 24px 20px 16px; color: #fff; font-size: 16px; font-weight: 600;
+  letter-spacing: .05em; text-transform: uppercase; }
 .brand small { display: block; margin-top: 2px; color: var(--rail-text); font-size: 10px; font-weight: 500; letter-spacing: .1em; }
+.brand .mark { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #6366f1, #7e22ce); display: flex;
+  align-items: center; justify-content: center; font-size: 16px; font-weight: 700; flex: none; letter-spacing: 0; }
 .rail-scroll { flex: 1; overflow-y: auto; padding: 8px 12px 0; }
 .rail nav { display: flex; flex-direction: column; gap: 4px; }
 .rail a, .rail button { display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 0 12px; border-radius: 8px;
@@ -101,7 +105,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .bell { position: relative; color: var(--muted); display: flex; min-height: 32px; min-width: 32px; align-items: center; justify-content: center; }
 .bell.on::after { content: ""; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: #e11d48; }
 main { padding: 8px 32px 64px; max-width: 1400px; width: 100%; }
-main.has-dock { padding-bottom: 168px; }
+main.has-dock { padding-bottom: 208px; }
 
 h1 { font: 400 36px/1.15 var(--serif); letter-spacing: -.02em; color: var(--ink); margin: 0 0 4px; }
 h2 { font: 500 20px/1.3 var(--serif); color: var(--ink); margin: 36px 0 12px; }
@@ -130,6 +134,19 @@ code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .disc { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
 .disc svg.i { width: 20px; height: 20px; }
 .disc.purple { background: var(--purple-line); color: var(--purple); } .disc.rose { background: var(--rose-tint); color: var(--rose); }
+.disc.emerald { background: var(--emerald-tint); color: var(--emerald-ink); }
+.hero.clear { border-color: #a7f3d0; background: linear-gradient(90deg, #ecfdf5, #f6fefb 55%, #ffffff); }
+.hero.clear .myview { color: var(--emerald-ink); }
+.struck { text-decoration: line-through; color: var(--muted) !important; }
+.num svg.i { width: 14px; height: 14px; }
+.toast { display: flex; align-items: center; gap: 14px; padding: 14px 18px; margin: 0 0 16px; border-radius: 16px; background: #0d1527; color: #e2e8f0;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .18); }
+.toast .grow { flex: 1; min-width: 0; } .toast .disc { width: 40px; height: 40px; background: #064e3b; color: #6ee7b7; }
+.toast .eyebrow { display: block; margin: 0; color: #6ee7b7; }
+.toast strong { display: block; color: #fff; font-size: 14px; overflow-wrap: anywhere; } .toast small { color: #cbd5e1; font-size: 12px; }
+.toast a { color: #6ee7b7; font-size: 12px; font-weight: 600; white-space: nowrap; min-height: 44px; display: inline-flex; align-items: center; }
+.assure { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0 auto 8px; font-size: 11px; color: var(--muted); }
+.assure svg.i { width: 12px; height: 12px; }
 .disc.amber { background: var(--amber-tint); color: var(--amber); } .disc.indigo { background: var(--indigo-tint); color: var(--indigo); }
 .go { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line-strong); background: #fff; color: var(--muted);
   display: flex; align-items: center; justify-content: center; flex: none; box-shadow: var(--shadow); }
@@ -191,6 +208,54 @@ form.route .actions { grid-column: 1 / -1; margin: 0; }
 .pills a:hover { background: var(--purple-tint); color: var(--purple-ink); }
 .pills a svg.i { width: 14px; height: 14px; }
 .pills .state { margin-left: auto; }
+
+/* --- the workspace: filters, lists, the board --- */
+.crumb { margin: 0 0 6px; color: var(--muted); font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; }
+.crumb a { color: inherit; }
+.filters, .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.filters a, .tabs a { display: inline-flex; align-items: center; min-height: 34px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: #fff; color: var(--text); font-size: 12px; font-weight: 600; text-decoration: none; }
+.filters a:hover, .tabs a:hover { border-color: var(--edge); }
+.filters a[aria-current], .tabs a[aria-current] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.tabs a { border-color: transparent; background: var(--subtle); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.toolbar .tabs { margin: 0; }
+a.button { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; }
+details.add > summary { gap: 8px; min-height: 28px; color: var(--purple-ink); }
+details.card.add { padding: 12px 24px; }
+details.add[open] > summary { margin-bottom: 12px; }
+.row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.row label { min-width: 0; } .row select, .row input, form.stack input[type="text"] { width: 100%; }
+.due { font-size: 12px; font-weight: 600; color: var(--text); min-width: 64px; text-align: right; }
+.rows .badge { margin-top: 1px; }
+.row-static { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 0; }
+.row-static form { margin: 0; }
+.why { display: block; margin-top: 6px; font-size: 13px; color: var(--text); line-height: 1.5; white-space: pre-wrap; }
+.why.none { color: var(--muted); }
+.quiet-button { min-height: 32px; padding: 0 10px; border-color: var(--line-strong); color: var(--muted); font-size: 12px; box-shadow: none;
+  display: inline-flex; align-items: center; }
+.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: start; margin-top: 16px; }
+.board.six { grid-template-columns: repeat(3, 1fr); margin-bottom: 24px; }
+.column { background: #f8fafc; border: 1px solid var(--line-strong); border-radius: 16px; padding: 12px; min-width: 0; }
+.column h2 { font: 600 13px var(--sans); margin: 4px 4px 12px; display: flex; justify-content: space-between; }
+.column h2 span { color: var(--muted); font-weight: 600; }
+.column .quiet { margin: 4px; }
+.tile { display: flex; flex-direction: column; gap: 8px; padding: 14px; margin-bottom: 10px; background: #fff; border: 1px solid var(--line-strong);
+  border-radius: 12px; box-shadow: var(--shadow); text-decoration: none; color: inherit; min-width: 0; }
+.tile:hover { box-shadow: 0 2px 8px rgba(15, 23, 42, .08); }
+.tile b { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.35; overflow-wrap: anywhere; }
+.tile .who { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.tile .what { font-size: 12px; color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.tile .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tile .foot { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted); font-weight: 600; }
+.signals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.signals .card { margin: 0; } .signal form { margin: 8px 0 0; }
+.principles { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.principles li { display: flex; gap: 12px; align-items: flex-start; }
+.principles b { font: 500 17px/1.35 var(--serif); color: var(--ink); }
+.columns.think { grid-template-columns: 1.7fr 1fr; }
+.columns.think .card + .card, .columns.think h2 + .card { margin-top: 16px; }
+.columns.one { grid-template-columns: 1fr; }
 
 /* --- the review sheet: one decision, read in full, in a dialog --- */
 dialog.sheet { width: min(768px, calc(100vw - 32px)); max-height: 90vh; padding: 0; border: 1px solid var(--line-strong);
@@ -291,10 +356,12 @@ td { font-variant-numeric: tabular-nums; }
 .signin label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
 
 /* Phone width: the rail becomes a bar across the top, and nothing scrolls sideways. */
-@media (max-width: 1100px) { .columns, .columns.two, form.route { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .columns, .columns.two, .columns.think, form.route { grid-template-columns: 1fr; }
+  .board, .board.six, .signals, .principles { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 860px) {
   .rail { position: static; width: auto; border-right: 0; }
   .brand { padding: 16px 16px 8px; } .brand small { display: none; }
+  details.add > summary { min-height: 44px; } .toast { flex-wrap: wrap; }
   .rail-scroll { padding: 0 8px 8px; overflow: visible; }
   .rail nav { flex-direction: row; flex-wrap: wrap; }
   .rail a, .rail button { width: auto; min-height: 44px; }
@@ -305,7 +372,8 @@ td { font-variant-numeric: tabular-nums; }
   .bell { min-height: 44px; min-width: 44px; }
   main { padding: 8px 16px 48px; } main.has-dock { padding-bottom: 24px; }
   h1 { font-size: 28px; }
-  .metrics, .strip { grid-template-columns: 1fr; }
+  .metrics, .strip, .board, .board.six, .signals, .principles, .row { grid-template-columns: 1fr; }
+  .filters a, .tabs a, .quiet-button { min-height: 44px; }
   .card { padding: 16px; }
   .dock { position: static; padding: 0 16px 24px; background: none; }
   .pills a, .linkrow a { min-height: 44px; } .pills .state { margin-left: 0; width: 100%; }
@@ -357,6 +425,8 @@ def icon(name: str) -> str:
 
 
 # White initials on each: the lightest, #0ea5e9 and #65a30d, were under 3:1, so they sit one step darker.
+# A named workstream's own colour (config/workstreams.yaml); the app fills this at start.
+STREAM_COLOURS: dict[str, str] = {}
 _STREAM_COLOURS = ("#e11d48", "#0284c7", "#059669", "#b45309", "#475569", "#7c3aed", "#0369a1", "#c2410c", "#4d7c0f")
 
 
@@ -364,7 +434,7 @@ def stream_badge(name: str) -> str:
     """A client's square, as the screens draw a workstream: its initials on a colour of its own."""
     words = [w for w in name.replace("-", " ").replace("_", " ").split() if w]
     initials = (words[0][0] + words[1][0]) if len(words) > 1 else name[:1]
-    colour = _STREAM_COLOURS[sum(name.encode()) % len(_STREAM_COLOURS)]
+    colour = STREAM_COLOURS.get(name) or _STREAM_COLOURS[sum(name.encode()) % len(_STREAM_COLOURS)]
     return f'<span class="badge" style="background:{colour}" aria-hidden="true">{escape(initials.upper())}</span>'
 
 
@@ -372,12 +442,13 @@ SCREENS = [
     ("home", "/", "Home", "home"),
     ("today", "/today", "Today", "today"),
     ("think", "/think", "Think", "think"),
-    ("new", "/new", "New work", "work"),
+    ("work", "/work", "Work", "work"),
     ("queue", "/queue", "Review", "review"),
     ("intelligence", "/intelligence", "Intelligence", "intelligence"),
 ]
 FOOT = [
     ("library", "/library", "Memory &amp; decisions", "memory"),
+    ("core", "/core", "Chidimma Core", "spark"),
     ("runs", "/inspect", "Runs", "runs"),
     ("calls", "/calendar", "Calls", "calls"),
     ("clients", "/files", "Clients", "folder"),
@@ -399,7 +470,7 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
         return f'<a href="{href}"{current}>{icon(glyph)}<span class="grow">{label}</span>{count}</a>'
 
     streams = "".join(
-        f'<a href="/files">{stream_badge(name)}<span>{escape(name)}</span></a>' for name in clients or []
+        f'<a href="/work?ws={quote(name)}">{stream_badge(name)}<span>{escape(name)}</span></a>' for name in clients or []
     ) or "<p>No clients yet.</p>"
     sign_out = f'<form method="post" action="/logout"><button>{icon("out")}Sign out</button></form>' if signed_in else ""
     return f"""<!doctype html>
@@ -411,10 +482,10 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
 <style>{CSS}</style></head>
 <body>
 <header class="rail">
-  <div class="brand">{escape(brand)}.<small>Executive intelligence</small></div>
+  <div class="brand"><span class="mark" aria-hidden="true">{escape(brand[:1])}.</span><span>{escape(brand)}.<small>Executive intelligence</small></span></div>
   <div class="rail-scroll">
     <nav aria-label="Screens">{"".join(link(*screen) for screen in SCREENS)}</nav>
-    <h2>Workstreams <a href="/new" aria-label="Start work for a client">{icon("plus")}</a></h2>
+    <h2>Workstreams <a href="/files" aria-label="Manage workstreams">{icon("plus")}</a></h2>
     <div class="streams">{streams}</div>
   </div>
   <div class="rail-foot">

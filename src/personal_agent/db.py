@@ -153,6 +153,64 @@ calls = Table(
 )
 
 # Clients whose runs may only reach providers approved for confidential work.
+# --- the owner's workspace: tasks, decisions, memory and the watchlist ---------------------
+# These are the owner's own records. The agent reads workstream knowledge as
+# context and writes none of them.
+tasks = Table(
+    "tasks",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("workstream", String, nullable=False, index=True),
+    Column("title", String, nullable=False),
+    Column("detail", String),
+    Column("status", String, nullable=False, index=True),  # todo | in_progress | awaiting_approval | done
+    Column("risk", String),  # low | medium | high
+    Column("owner", String),
+    Column("due", String),  # the owner's local time, YYYY-MM-DDTHH:MM
+    Column("decision", String),  # approved | changes | declined
+    Column("created_at", String),
+    Column("updated_at", String),
+)
+
+# What the owner decided, and why: for a task, or for an agent run's draft.
+decisions = Table(
+    "decisions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("workstream", String, index=True),
+    Column("title", String),
+    Column("decision", String),  # approved | changes | declined
+    Column("reason", String),
+    Column("source", String),  # task | run
+    Column("ref", String),
+    Column("created_at", String),
+)
+
+# Workstream knowledge (priority, brand rule, preference, lesson) and saved drafts.
+memory_items = Table(
+    "memory_items",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("workstream", String, index=True),
+    Column("kind", String, index=True),  # priority | brand_rule | preference | lesson | draft
+    Column("title", String),
+    Column("text", String),
+    Column("created_at", String),
+)
+
+# The owner's watchlist. Each signal is entered by the owner, with its source.
+signals = Table(
+    "signals",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("workstream", String, index=True),
+    Column("kind", String, index=True),  # reputation | regulation | opportunity
+    Column("title", String),
+    Column("note", String),
+    Column("source", String),
+    Column("created_at", String),
+)
+
 # The owner's choice of model for a tier, made on the Settings screen. A row
 # replaces that tier's line in config/route_table.yaml; no row leaves the file's.
 model_routes = Table(
@@ -367,8 +425,76 @@ class Database:
             cx.execute(delete(client_settings).where(client_settings.c.name == client))
             cx.execute(insert(client_settings).values(name=client, retention_days=days, updated_at=now()))
 
+    # --- the owner's workspace -----------------------------------------------
+    def _insert(self, table: Table, **fields) -> str:
+        row_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(insert(table).values(id=row_id, created_at=now(), **fields))
+        return row_id
+
+    def _rows(self, table: Table, **where) -> list[dict]:
+        stmt = select(table).order_by(table.c.created_at.desc())
+        for column, value in where.items():
+            stmt = stmt.where(table.c[column] == value)
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(stmt).mappings()]
+
+    def _remove(self, table: Table, row_id: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(table).where(table.c.id == row_id))
+
+    def create_task(self, **fields) -> str:
+        return self._insert(tasks, updated_at=now(), **fields)
+
+    def update_task(self, task_id: str, **fields) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(tasks).where(tasks.c.id == task_id).values(updated_at=now(), **fields))
+
+    def get_task(self, task_id: str) -> dict | None:
+        return next(iter(self._rows(tasks, id=task_id)), None)
+
+    def list_tasks(self) -> list[dict]:
+        return self._rows(tasks)
+
+    def delete_task(self, task_id: str) -> None:
+        self._remove(tasks, task_id)
+
+    def record_decision(self, workstream: str, title: str, decision: str, reason: str | None, source: str, ref: str) -> str:
+        return self._insert(decisions, workstream=workstream, title=title, decision=decision, reason=reason,
+                            source=source, ref=ref)
+
+    def list_decisions(self) -> list[dict]:
+        return self._rows(decisions)
+
+    def add_memory(self, workstream: str, kind: str, title: str, text: str) -> str:
+        return self._insert(memory_items, workstream=workstream, kind=kind, title=title, text=text)
+
+    def list_memory(self, workstream: str | None = None) -> list[dict]:
+        return self._rows(memory_items, **({"workstream": workstream} if workstream else {}))
+
+    def delete_memory(self, item_id: str) -> None:
+        self._remove(memory_items, item_id)
+
+    def add_signal(self, workstream: str, kind: str, title: str, note: str, source: str) -> str:
+        return self._insert(signals, workstream=workstream, kind=kind, title=title, note=note, source=source)
+
+    def list_signals(self) -> list[dict]:
+        return self._rows(signals)
+
+    def delete_signal(self, signal_id: str) -> None:
+        self._remove(signals, signal_id)
+
+    def recent_audit(self, limit: int = 40) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(
+                select(audit_log).order_by(audit_log.c.created_at.desc()).limit(limit)
+            ).mappings()]
+
     def forget_client_settings(self, client: str) -> None:
         with self.engine.begin() as cx:
+            # A deleted client's tasks, decisions, knowledge and signals go with it.
+            for table in (tasks, decisions, memory_items, signals):
+                cx.execute(delete(table).where(table.c.workstream == client))
             cx.execute(delete(client_settings).where(client_settings.c.name == client))
             cx.execute(delete(restricted_clients).where(restricted_clients.c.name == client))
 

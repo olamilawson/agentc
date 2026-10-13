@@ -30,6 +30,19 @@ class ModelChoice(BaseModel):
     open: bool = False  # open-weight
 
 
+class CoreSettings(BaseModel):
+    """The owner's standard (config/core.yaml)."""
+
+    dimensions: list[dict] = []
+    principles: list[str] = []
+    lens: list[str] = []
+
+
+class Workstream(BaseModel):
+    name: str
+    colour: str | None = None
+
+
 class Budgets(BaseModel):
     max_total_tokens: int = 200_000
     max_tool_calls: int = 20
@@ -85,6 +98,10 @@ class Settings(BaseModel):
     # The address whose calendar the agent reads for free time. None: the mailbox's own.
     graph_calendar: str | None = None
     calendar: CalendarPolicy = CalendarPolicy()
+    # The owner's principles, sent with every model step and shown on the Core screen.
+    core: CoreSettings = CoreSettings()
+    # The workstreams created at the first start (config/workstreams.yaml).
+    workstreams: list[Workstream] = []
     # The models the Settings screen offers for each tier's route.
     model_catalogue: list[ModelChoice] = []
     # The name shown in the rail and the page titles.
@@ -132,7 +149,13 @@ def load_settings() -> Settings:
     calendar = CalendarPolicy(**(yaml.safe_load(calendar_path.read_text()) if calendar_path.exists() else {}))
     models_path = Path(env("PERSONAL_AGENT_MODELS") or REPO_ROOT / "config" / "models.yaml")
     catalogue = (yaml.safe_load(models_path.read_text()) or {}).get("models", []) if models_path.exists() else []
+    def from_yaml(variable: str, filename: str) -> dict:
+        path = Path(env(variable) or REPO_ROOT / "config" / filename)
+        return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.exists() else {}
+
     return Settings(
+        core=CoreSettings(**from_yaml("PERSONAL_AGENT_CORE", "core.yaml")),
+        workstreams=[Workstream(**w) for w in from_yaml("PERSONAL_AGENT_WORKSTREAMS", "workstreams.yaml").get("workstreams", [])],
         model_catalogue=[ModelChoice(**m) for m in catalogue],
         brand_name=env("PERSONAL_AGENT_NAME") or "Chidimma OS",
         owner_name=env("PERSONAL_AGENT_OWNER_NAME") or "Chidimma",

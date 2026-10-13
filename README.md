@@ -73,6 +73,16 @@ this repository implements **Delivery phase 1: Foundation**.
   to meet contrast minimums; the file gives the ratios. The two typefaces
   (Newsreader and Plus Jakarta Sans, SIL Open Font License) ship in
   `api/static/fonts`; the pages call no outside host.
+- **The owner's workspace** — `src/personal_agent/api/workspace.py`, after the
+  owner's own Chidimma OS prototype. Tasks (status, risk, owner, due time) sit
+  beside agent runs in one list: Today is that list, Work is the board. A
+  decision made in Review, on a task or on an agent's draft, is kept with its
+  reason in the decision library on Memory & decisions. Workstream knowledge
+  recorded there, and the principles in `config/core.yaml`, go to the model
+  with every step for that workstream and no other (`Harness.standing`).
+  Intelligence is a watchlist the owner fills; no feed is connected. The nine
+  workstreams in `config/workstreams.yaml` are created once. Nothing is sample
+  data.
 - **Models** — each step belongs to a tier (cheap, standard, strong). The
   Settings and cost screen routes each tier to a model from
   `config/models.yaml` or to any typed id, saves the choice in the database
