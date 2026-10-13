@@ -176,8 +176,39 @@ DOCK_SCRIPT = """<script>
 (function () {
   var form = document.getElementById('ask'), field = document.getElementById('ask-goal');
   if (!form) return;
-  form.addEventListener('submit', function () {
-    try { sessionStorage.setItem('goal', field.value); } catch (e) {}
+  var mode = 'ask', pills = document.querySelectorAll('.pills [data-mode]');
+  function choose(next) {
+    mode = next;
+    pills.forEach(function (pill) {
+      var on = pill.dataset.mode === mode;
+      pill.setAttribute('aria-checked', on ? 'true' : 'false');
+      if (on) field.placeholder = pill.dataset.hint;
+    });
+  }
+  pills.forEach(function (pill) {
+    pill.addEventListener('click', function () { choose(pill.dataset.mode); field.focus(); });
+  });
+  // "Take action": the line becomes the title of a new task, on this screen if it has the form.
+  function newTask(text) {
+    var box = document.querySelector('details.add input[name="title"]');
+    if (!box) return false;
+    box.closest('details').open = true;
+    box.value = text;
+    box.focus();
+    return true;
+  }
+  try {
+    if (sessionStorage.getItem('mode') === 'action' && sessionStorage.getItem('goal') !== null) {
+      if (newTask(sessionStorage.getItem('goal'))) { sessionStorage.removeItem('goal'); sessionStorage.removeItem('mode'); }
+    }
+  } catch (e) {}
+  form.addEventListener('submit', function (e) {
+    if (mode === 'action') {
+      e.preventDefault();
+      if (newTask(field.value)) { field.value = ''; return; }
+    }
+    try { sessionStorage.setItem('goal', field.value); sessionStorage.setItem('mode', mode); } catch (err) {}
+    if (mode === 'action') location.href = '/today';
   });
   document.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); field.focus(); }
@@ -186,9 +217,13 @@ DOCK_SCRIPT = """<script>
 </script>"""
 GOAL_SCRIPT = """<script>
 (function () {
-  var goal = null;
-  try { goal = sessionStorage.getItem('goal'); sessionStorage.removeItem('goal'); } catch (e) {}
-  var field = document.querySelector('textarea[name="question"]');
+  var goal = null, mode = null;
+  try {
+    goal = sessionStorage.getItem('goal'); mode = sessionStorage.getItem('mode');
+    sessionStorage.removeItem('goal'); sessionStorage.removeItem('mode');
+  } catch (e) {}
+  var field = document.querySelector('textarea[name="question"]'), pick = document.querySelector('select[name="mode"]');
+  if (pick && mode && pick.querySelector('option[value="' + mode + '"]')) pick.value = mode;
   if (goal && field) { field.value = goal; field.focus(); }
 })();
 </script>"""
@@ -1307,7 +1342,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <h2>Skills</h2>
 {files}
 {ws_api.activity()}
-""")
+""", dock=_dock())
 
     # --- home -------------------------------------------------------------------------
     TAGS = {
@@ -1319,6 +1354,38 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         "waiting_for_approval": "waiting for you", "waiting_for_input": "has questions for you",
         "done": "done", "failed": "failed", "cancelled": "cancelled", "running": "working", "queued": "queued",
     }
+
+    # --- the command bar ----------------------------------------------------------------
+    # Six things to do with a line of text. Five go to Think, each asking for a different
+    # kind of answer; "Take action" makes it a task, which the owner then works or approves.
+    DOCK_MODES = (
+        ("ask", "Ask", "spark", "Ask {name} anything"), ("research", "Research", "memory", "What should the agent research?"),
+        ("create", "Create", "think", "What should the agent write?"), ("analyse", "Analyse", "intelligence", "What should the agent analyse?"),
+        ("plan", "Plan", "runs", "What needs a plan?"), ("action", "Take action", "decide", "What needs doing? It becomes a task."),
+    )
+
+    def _dock() -> str:
+        icon = ui.icon
+        missing = _missing_model_keys()
+        key_state = f"No {' or '.join(missing)} on the server yet" if missing else "Model key set"
+        modes = "".join(
+            f'<button type="button" role="radio" aria-checked="{"true" if key == "ask" else "false"}" data-mode="{key}" '
+            f'data-hint="{escape(hint.format(name=settings.owner_name))}">{icon(glyph)}{label}</button>'
+            for key, label, glyph, hint in DOCK_MODES
+        )
+        return f"""<div class="dock">
+  <p class="assure">{icon("lock")}Your judgement stays in control. Each outside action waits for your review.</p>
+  <form action="/think" method="get" id="ask">
+    <label for="ask-goal" style="position:absolute;left:-9999px">Your request</label>
+    <input type="text" id="ask-goal" placeholder="Ask {escape(settings.owner_name)} anything" autocomplete="off" maxlength="2000"/>
+    <span class="kbd">Ctrl K</span>
+    <a class="aside" href="/library#context" aria-label="Add to memory">{icon("memory")}</a>
+    <button aria-label="Send">{icon("up")}</button>
+  </form>
+  <div class="pills" role="radiogroup" aria-label="What to do with it">{modes}
+    <span class="state">{escape(key_state)}</span>
+  </div>
+</div>{DOCK_SCRIPT}"""
 
     @app.get("/", response_class=HTMLResponse)
     def home() -> str:
@@ -1379,25 +1446,6 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             for s in signals[:4]
         )
         connected = engine.harness.mail is not None
-        missing = _missing_model_keys()
-        key_state = f"No {' or '.join(missing)} on the server yet" if missing else "Model key set"
-        dock = f"""<div class="dock">
-  <form action="/think" method="get" id="ask">
-    <label for="ask-goal" style="position:absolute;left:-9999px">Ask a question</label>
-    <input type="text" id="ask-goal" placeholder="Ask {escape(settings.owner_name)} anything" autocomplete="off" maxlength="2000"/>
-    <span class="kbd">Ctrl K</span>
-    <button aria-label="Take this question to Think">{icon("up")}</button>
-  </form>
-  <p class="assure">{icon("lock")}Your judgement stays in control. Each outside action waits for your review.</p>
-  <div class="pills">
-    <a href="/think">{icon("think")}Think</a>
-    <a href="/new#brief">{icon("brief")}Evaluate a brief</a>
-    <a href="/new#creative">{icon("creative")}Review creative work</a>
-    <a href="/new#draft">{icon("draft")}Draft a document</a>
-    <a href="/library#context">{icon("memory")}Add to memory</a>
-    <span class="state">{escape(key_state)}</span>
-  </div>
-</div>"""
         return render("Home", "home", f"""
 <h1>Good {part}, {escape(settings.owner_name)}.</h1>
 <p class="lede">Here's what matters today.</p>
@@ -1431,7 +1479,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     {f'<ul class="rows">{watch}</ul>' if watch else '<p class="quiet">No signal on the watchlist yet.</p>'}
   </section>
 </div>
-""", script=DOCK_SCRIPT, dock=dock)
+""", dock=_dock())
 
     # --- today ------------------------------------------------------------------------
     def _day_bounds() -> tuple[str, str]:
@@ -1465,6 +1513,9 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     # --- think ------------------------------------------------------------------------
     NO_CLIENT = "General"
     DEPTH_WORDS = {"quick": "Quick", "considered": "Considered", "deep": "Deep"}
+    MODE_WORDS = {"ask": "Ask: a direct answer", "research": "Research: what is known, what to check",
+                  "create": "Create: a piece ready to use", "analyse": "Analyse: the finding and its evidence",
+                  "plan": "Plan: steps, owners, risks"}
 
     # The fifteen repeatable workflows the owner names. Those with an agent workflow behind
     # them open it; the others start a Think question, which is what the agent can do for them today.
@@ -1509,7 +1560,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             else:
                 body = '<p class="quiet">The agent is thinking. This page updates itself.</p>'
             cards.append(f"""<section class="card" id="q-{r["id"]}">
-  <p class="chips"><span class="tag c-purple">{escape(DEPTH_WORDS.get(inputs.get("depth"), "Considered"))}</span>
+  <p class="chips"><span class="tag c-blue">{escape(MODE_WORDS.get(inputs.get("mode"), "Ask").split(":")[0])}</span>
+    <span class="tag c-purple">{escape(DEPTH_WORDS.get(inputs.get("depth"), "Considered"))}</span>
     <span class="tag c-slate">{escape(r["client"])}</span>
     <span class="s-{escape(r["status"])}">{escape(STATUS_WORDS.get(r["status"], r["status"]))}</span></p>
   <h3 class="say">{escape(str(inputs.get("question") or "Question removed"))}</h3>
@@ -1545,8 +1597,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <label>Your question <textarea name="question" rows="4" maxlength="8000" required>{escape(start[:500])}</textarea></label>
     <label>Material to reason from <span class="or">optional: paste a note, a mail, figures</span>
       <textarea name="material" rows="4" maxlength="100000"></textarea></label>
-    <label>Depth, and the model that answers
-      <select name="depth">{depths}</select></label>
+    <div class="row two">
+      <label>Mode <select name="mode">{"".join(f'<option value="{k}">{escape(v)}</option>' for k, v in MODE_WORDS.items())}</select></label>
+      <label>Depth, and the model that answers
+        <select name="depth">{depths}</select></label>
+    </div>
     <label>Context <span class="or">the agent reads this workstream's knowledge and no other's</span>
       <select name="client"><option value="">No workstream</option>{options}</select></label>
     <button class="approve">Ask this question</button>
@@ -1582,6 +1637,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         inputs = {
             "question": question[:8000], "material": str(form.get("material") or "").replace("\r\n", "\n")[:100_000],
             "depth": depth if depth in think.DEPTHS else "considered",
+            "mode": str(form.get("mode") or "") if str(form.get("mode") or "") in think.MODES else "ask",
         }
         try:
             run_id = engine.start_run("think", client, inputs, work=False)
@@ -1644,7 +1700,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <p class="meta">This month so far: ${spend["total_usd"]:.2f} across {plural(spend["runs"], "run")}.</p>
   </section>
 </div>
-""")
+""", dock=_dock())
 
     @app.get("/queue", response_class=HTMLResponse)
     def queue_page(ws: str = "", done: str = "") -> str:
@@ -1798,11 +1854,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 </div>
 {waiting}
 {"".join(sheets)}
-""", script=SHEET_SCRIPT + READ_ALOUD_SCRIPT)
+""", script=SHEET_SCRIPT + READ_ALOUD_SCRIPT, dock=_dock())
 
     ws_api = workspace.install(
         app, settings=settings, db=db, engine=engine, render=render, tags=TAGS, status_words=STATUS_WORDS,
-        sheet_script=SHEET_SCRIPT, cap_banner=_cap_banner, calls_today=_calls_today, fields=_fields,
+        sheet_script=SHEET_SCRIPT, cap_banner=_cap_banner, calls_today=_calls_today, fields=_fields, dock=_dock,
     )
     return app
 

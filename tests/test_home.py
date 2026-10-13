@@ -22,8 +22,11 @@ def test_an_empty_home_greets_the_owner_and_says_nothing_waits(settings, monkeyp
     assert "Calendar not connected" in page and "No call is scheduled." in page
     assert "No OPENAI_API_KEY on the server yet" in page
     assert "No clients yet." in page
-    for href in ('href="/queue"', 'href="/new#brief"', 'href="/new#creative"', 'href="/new#draft"', 'href="/library"'):
+    for href in ('href="/queue"', 'href="/work"', 'href="/library"', 'href="/core"'):
         assert href in page
+    for mode in ("ask", "research", "create", "analyse", "plan", "action"):  # the six things the bar does
+        assert f'data-mode="{mode}"' in page
+    assert 'id="theme"' in page and "localStorage.getItem('theme')" in page  # the dark theme switch
     assert "http://" not in page and "https://" not in page  # no outside host: fonts and icons ship with the app
 
 

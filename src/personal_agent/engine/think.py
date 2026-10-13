@@ -25,6 +25,28 @@ from personal_agent.harness.contract import StepContract
 DEPTHS = {"quick": "cheap", "considered": "standard", "deep": "strong"}
 
 
+# What the owner wants done with the question. Each adds one instruction to the step.
+MODES = {
+    "ask": "",
+    "research": (
+        " Treat this as research. Set out what the material establishes, what it leaves open, and what to check "
+        "and where. Never present an unchecked claim as a finding."
+    ),
+    "create": (
+        " Write the piece the owner asks for, ready to use, in the owner's voice. Put the piece itself in answer, "
+        "with no preamble."
+    ),
+    "analyse": (
+        " Analyse the material. Give the finding first, then the evidence for it from the material, then what "
+        "the evidence does not support."
+    ),
+    "plan": (
+        " Produce a plan: the outcome, the steps in order, who owns each where the owner has said, the risks, "
+        "and the first step to take this week."
+    ),
+}
+
+
 class ThinkIn(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
     material: str = ""
@@ -80,7 +102,8 @@ def build_think_graph(h):
         tier = DEPTHS[depth]
         if tier not in h.settings.route_table:  # a route table without that tier: use what it has
             tier = "standard" if "standard" in h.settings.route_table else next(iter(h.settings.route_table), tier)
-        contract = h.contracts["think"].model_copy(update={"tier": tier})
+        base = h.contracts["think"]
+        contract = base.model_copy(update={"tier": tier, "instruction": base.instruction + MODES.get(inputs.get("mode"), "")})
         material = inputs.get("material") or ""
         payload = {"question": inputs.get("question", ""), "material": material}
         tracker = BudgetTracker(h.settings.budgets)

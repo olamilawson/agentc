@@ -36,7 +36,7 @@ NOT_WORK = {"think", learning.WORKFLOW}
 
 
 def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, sheet_script, cap_banner,
-            calls_today, fields) -> SimpleNamespace:
+            calls_today, fields, dock) -> SimpleNamespace:
     icon = ui.icon
     zone = ZoneInfo(settings.calendar.timezone)
 
@@ -245,7 +245,7 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
 {listing}
 {f'<section class="card"><div class="linkrow"><h2>Calls today</h2><a href="/calendar">All calls {icon("arrow")}</a></div><ul class="rows">{calls}</ul></section>' if calls else ""}
 {edit_sheets(found, path)}
-""", script=sheet_script)
+""", script=sheet_script, dock=dock())
 
     # --- work ------------------------------------------------------------------------------
     @app.get("/work", response_class=HTMLResponse)
@@ -277,7 +277,7 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
 {new_task_form(path, ws)}
 <div class="board">{columns}</div>
 {edit_sheets(found, path)}
-""", script=sheet_script)
+""", script=sheet_script, dock=dock())
 
     # --- tasks -----------------------------------------------------------------------------
     def task_fields(form: dict) -> dict:
@@ -525,7 +525,7 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
   <div class="linkrow"><h2>The principles that hold it together</h2><span class="eyebrow">Sent with every step of the agent's work</span></div>
   {f'<ol class="principles">{principles}</ol>' if principles else '<p class="quiet">No principle is set in config/core.yaml.</p>'}
 </section>
-""")
+""", dock=dock())
 
     return SimpleNamespace(
         items=items, filtered=filtered, open_count=open_count, ws_chips=ws_chips, known=known, chip=chip,

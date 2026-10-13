@@ -160,3 +160,47 @@ def test_settings_shows_each_scheduled_job_and_its_last_result(settings):
     assert '<span class="s-done">worked</span> 2026-10-12 02:15:04 UTC' in page and "3 kept on this server" in page
     assert '<span class="s-failed">failed</span>' in page and "a=b &lt;cap&gt;" in page
     assert page.count("Has not run yet") == 1
+
+
+# --- the six modes and the dark theme ---------------------------------------------------
+def test_a_mode_changes_what_the_agent_is_asked_for(settings):
+    from tests.test_workspace import Listening
+
+    class Asked(Listening):
+        def complete(self, contract, context, images=None, providers=None):
+            self.contexts.append(contract.instruction)
+            return RecordedGateway.complete(self, contract, context, images, providers)
+
+    gateway = Asked({"think": [ANSWER, ANSWER]})
+    client = TestClient(create_app(settings, gateway=gateway), follow_redirects=False)
+    client.post("/think", data={"question": "The launch.", "mode": "plan"})
+    client.post("/think", data={"question": "The launch.", "mode": "nonsense"})
+    planned, asked = gateway.contexts
+    assert "Produce a plan" in planned and "Produce a plan" not in asked
+    runs = client.get("/runs").json()
+    assert {r["inputs"]["mode"] for r in runs} == {"plan", "ask"}
+    page = client.get("/think").text
+    assert '<span class="tag c-blue">Plan</span>' in page and '<option value="research">' in page
+
+
+def test_the_command_bar_is_on_the_workspace_screens_and_take_action_fills_a_new_task(settings):
+    client = _client(settings)
+    for path in ("/", "/today", "/work", "/queue", "/intelligence", "/library", "/core"):
+        page = client.get(path).text
+        assert 'data-mode="action"' in page and page.count('id="ask-goal"') == 1, path
+    assert "details.add input[name=\"title\"]" in client.get("/today").text  # the script that fills the task
+    assert 'data-mode="action"' not in client.get("/cost").text
+
+
+def test_the_dark_theme_sets_every_token_and_the_page_reads_the_saved_choice_before_it_paints(settings):
+    import re
+
+    from personal_agent.api import ui
+
+    light = set(re.findall(r"--[a-z-]+(?=:)", ui.CSS.split(":root {", 1)[1].split("}", 1)[0]))
+    dark = set(re.findall(r"--[a-z-]+(?=:)", ui.CSS.split(':root[data-theme="dark"] {', 1)[1].split("}", 1)[0]))
+    kept = {"--rail", "--rail-hover", "--rail-active", "--rail-text", "--rail-line", "--serif", "--sans", "--mono"}
+    assert light - dark - kept == set()  # the rail and the typefaces are the same in both
+    page = _client(settings).get("/").text
+    assert page.index("localStorage.getItem('theme')") < page.index("<body>")
+    assert "localStorage.getItem('theme')" in ui.sign_in_page("Chidimma OS")
