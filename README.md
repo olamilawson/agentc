@@ -83,6 +83,19 @@ this repository implements **Delivery phase 1: Foundation**.
   Intelligence is a watchlist the owner fills; no feed is connected. The nine
   workstreams in `config/workstreams.yaml` are created once. Nothing is sample
   data.
+- **Skill runs** — `engine/skill_run.py`. Six skills (campaign review, copy
+  review, executive email, reputation assessment, competitor analysis,
+  executive update) share one graph and each is a workflow of its own name
+  with its own rubric in `skills/<name>/SKILL.md`, so the learning review
+  proposes changes to each from the owner's edits. A run works from the
+  owner's request and supplied material, with no web access; the result is
+  approved, edited then approved, or sent back once per revision, and is
+  saved to the workstream's folder. The rubrics are provisional.
+- **Mail watcher** — `./deploy/setup.sh --watcher` turns on the hook and
+  imports `deploy/n8n-sponsorship-watcher.json` into the server's n8n. The
+  watcher posts each new Outlook message as Microsoft describes it to
+  `/hooks/n8n/outlook`; the app maps it, turns HTML into text and starts a
+  triage run once per message.
 - **Agency dispatch** — `engine/dispatch.py` and `api/dispatches.py`, after the
   owner's Stitch designs. The owner writes a brief for an agency and picks its
   files; no model is involved. The exact mail waits for approval, is then held

@@ -165,5 +165,5 @@ def test_think_offers_starters_the_lens_and_the_fifteen_workflows(settings):
     client = _client(settings)
     page = client.get("/think").text
     assert "Let's think this through." in page and "Is the thinking sound?" in page
-    assert page.count("Agent workflow") == 4 and page.count("Starts a question here") == 11
+    assert page.count("Agent workflow") == 10 and page.count("Starts a question here") == 5
     assert ">Challenge this campaign idea.</textarea>" in client.get("/think?start=Challenge%20this%20campaign%20idea.").text

@@ -36,6 +36,7 @@ from personal_agent.engine.sponsorship_triage import (
 from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
 from personal_agent.engine.think import build_think_graph, think_contracts, think_outputs
 from personal_agent.engine import dispatch as agency_dispatch
+from personal_agent.engine import skill_run
 from personal_agent.graph_mail import GraphError, GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
@@ -320,6 +321,8 @@ WORKFLOWS: dict[str, Workflow] = {
     "strategy-drafting": Workflow(build_drafting_graph, drafting_outputs, revises=True),
     "call-change": Workflow(build_call_change_graph, call_change_outputs),
     "think": Workflow(build_think_graph, think_outputs),
+    # Each skill is a workflow of its own name, so the learning review reads it against its own rubric.
+    **{name: Workflow(build, skill_run.skill_outputs, revises=True) for name, build in skill_run.builders().items()},
     agency_dispatch.WORKFLOW: Workflow(
         agency_dispatch.build_dispatch_graph, agency_dispatch.dispatch_outputs, agency_dispatch.dispatch_rejected
     ),
@@ -388,6 +391,7 @@ class Engine:
             contracts={
                 **default_contracts(), **brief_contracts(), **sponsorship_contracts(), **creative_contracts(),
                 **drafting_contracts(), **call_change_contracts(), **think_contracts(),
+                **skill_run.skill_contracts(),
             },
             skill_text=skills.get("foundation-test", ""),
             skills=skills,

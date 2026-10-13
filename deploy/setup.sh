@@ -11,6 +11,8 @@
 #                                      saves it and restarts the app. The key does not show as you paste it.
 #   ./deploy/setup.sh --mailbox        connects the Microsoft mailbox: asks for the four values from the
 #                                      app registration (deploy/microsoft-graph.md), restarts and tests it
+#   ./deploy/setup.sh --watcher        turns on the hook for new mail and loads the watcher into this
+#                                      server's n8n; you then choose the Outlook login in n8n and switch it on
 #   ./deploy/restore.sh                returns the agent to one of its backups (a separate command)
 #   ./deploy/setup.sh --local-model qwen2.5:3b
 #                                      runs an open-weight model on this server for routine steps
@@ -145,6 +147,49 @@ say "Starting the app"
 if [ -n "$MAILBOX" ]; then
   say "Testing the mailbox connection (this sends no mail)"
   docker compose exec -T api python -m personal_agent.graph_mail || true
+fi
+
+# 4c. The mail watcher: a secret the app and n8n share, and the watcher itself loaded into n8n
+WATCHER=""
+for arg in "$@"; do [ "$arg" = "--watcher" ] && WATCHER="yes"; done
+if [ -n "$WATCHER" ]; then
+  say "Setting up the mail watcher"
+  if ! grep -q '^PERSONAL_AGENT_N8N_SECRET=.\+' .env; then
+    set_env PERSONAL_AGENT_N8N_SECRET "$(openssl rand -hex 32)"
+    docker compose up -d api
+    echo "The hook for new mail is on."
+  fi
+  N8N=$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])n8n[-_]n8n[-_]?[0-9]*$|^n8n$' | head -n 1 || true)
+  if [ -z "$N8N" ]; then
+    echo "No n8n container was found on this server, so the watcher was not loaded."
+    echo "Import deploy/n8n-sponsorship-watcher.json in n8n by hand (deploy/microsoft-graph.md, step 7)."
+  else
+    WORK=$(mktemp -d)
+    secret=$(grep '^PERSONAL_AGENT_N8N_SECRET=' .env | cut -d= -f2-)
+    # The secret goes from .env into n8n's own encrypted store. It is never shown.
+    printf '[{"id":"paAgentHookAuth01","name":"Personal agent hook","type":"httpHeaderAuth","data":{"name":"x-agent-secret","value":"%s"}}]' \
+      "$secret" > "$WORK/credential.json"
+    unset secret
+    cp deploy/n8n-sponsorship-watcher.json "$WORK/workflow.json"
+    docker cp "$WORK/credential.json" "$N8N:/tmp/pa-credential.json"
+    docker cp "$WORK/workflow.json" "$N8N:/tmp/pa-workflow.json"
+    rm -rf "$WORK"
+    loaded="yes"
+    docker exec -u node "$N8N" n8n import:credentials --input=/tmp/pa-credential.json || loaded=""
+    docker exec -u node "$N8N" n8n import:workflow --input=/tmp/pa-workflow.json || loaded=""
+    docker exec -u root "$N8N" rm -f /tmp/pa-credential.json /tmp/pa-workflow.json || true
+    if [ -n "$loaded" ]; then
+      echo
+      echo "The watcher is in n8n, switched off. Two steps remain, both in n8n:"
+      echo "  1. Open the workflow 'Personal agent: sponsorship mailbox watcher'. On its first step,"
+      echo "     choose your Microsoft Outlook login (or create one: n8n walks you through the Microsoft sign-in)."
+      echo "  2. Switch the workflow to Active."
+    else
+      echo
+      echo "n8n did not take the import. Nothing else on this server was changed."
+      echo "Follow the by-hand steps in deploy/microsoft-graph.md, step 7."
+    fi
+  fi
 fi
 
 # 5. Connect the domain through this server's nginx. Only this one site is added.

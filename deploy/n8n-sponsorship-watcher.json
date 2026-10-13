@@ -1,0 +1,80 @@
+{
+  "id": "paSponsorWatcher1",
+  "name": "Personal agent: sponsorship mailbox watcher",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "event": "messageReceived",
+        "output": "raw",
+        "filters": {},
+        "options": {}
+      },
+      "id": "a1f0c0de-0000-4000-8000-000000000001",
+      "name": "New mail in the mailbox",
+      "type": "n8n-nodes-base.microsoftOutlookTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Choose your Microsoft Outlook credential here. Add a folder filter if the mailbox holds more than sponsorship mail."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://ijeoma.pro/hooks/n8n/outlook",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a1f0c0de-0000-4000-8000-000000000002",
+      "name": "Hand it to the agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "paAgentHookAuth01",
+          "name": "Personal agent hook"
+        }
+      },
+      "notes": "The agent ignores a mail it has already taken, so a retry is safe."
+    }
+  ],
+  "connections": {
+    "New mail in the mailbox": {
+      "main": [
+        [
+          {
+            "node": "Hand it to the agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

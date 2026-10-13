@@ -14,6 +14,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
@@ -29,7 +30,7 @@ from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
 from personal_agent import auth, connectors, costs, jobs, learning, retention, tracing
 from personal_agent.engine import dispatch as agency_dispatch
-from personal_agent.engine import think
+from personal_agent.engine import skill_run, think
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
 from personal_agent.skills import sync as skill_sync
@@ -76,6 +77,40 @@ class InboundMail(BaseModel):
     subject: str = Field(default="", max_length=1000)
     body: str = Field(min_length=1, max_length=200_000)
     received_at: str | None = Field(default=None, max_length=64)
+
+
+class _Text(HTMLParser):
+    """The words of an HTML mail, with a line break where a block ends. Scripts and styles are dropped."""
+
+    BLOCKS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "table", "blockquote"}
+
+    def __init__(self):
+        super().__init__()
+        self.parts: list[str] = []
+        self.skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "head"):
+            self.skip += 1
+        elif tag in self.BLOCKS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "head"):
+            self.skip = max(0, self.skip - 1)
+        elif tag in self.BLOCKS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(data)
+
+
+def html_to_text(html: str) -> str:
+    parser = _Text()
+    parser.feed(html)
+    lines = [" ".join(line.split()) for line in "".join(parser.parts).splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 class LedgerCorrection(BaseModel):
@@ -387,6 +422,31 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         except UnknownWorkflow as e:
             raise HTTPException(400, str(e))
         return {"run_id": run_id, "run": db.get_run(run_id)}
+
+    @app.post("/hooks/n8n/outlook", status_code=201)
+    async def outlook_mail(request: Request, x_agent_secret: str | None = Header(default=None)) -> dict:
+        """The same hook, fed a message as Microsoft Graph describes it, so the watcher needs
+        no field mapping: id, subject, from.emailAddress, body.content, receivedDateTime."""
+        if not settings.n8n_secret:
+            raise HTTPException(503, "the n8n webhook is not configured")
+        if not x_agent_secret or not hmac.compare_digest(x_agent_secret, settings.n8n_secret):
+            db.audit(None, "webhook_refused", {"hook": "n8n/outlook"})
+            raise HTTPException(401, "bad or missing secret")
+        try:
+            message = await request.json()
+            sender = ((message.get("from") or message.get("sender") or {}).get("emailAddress")) or {}
+            content = message.get("body") or {}
+            text = content.get("content") or message.get("bodyPreview") or ""
+            if str(content.get("contentType", "")).lower() == "html" or "<html" in text[:400].lower():
+                text = html_to_text(text)
+            mail = InboundMail(
+                message_id=message.get("id") or "", sender=sender.get("address") or "",
+                sender_name=(sender.get("name") or None), subject=(message.get("subject") or "")[:1000],
+                body=text.strip()[:200_000] or "(no text in the mail)", received_at=message.get("receivedDateTime"),
+            )
+        except Exception as e:  # not a mail the agent can read: refuse it, start nothing
+            raise HTTPException(422, f"this is not an Outlook message the agent can read: {type(e).__name__}")
+        return sponsorship_mail(mail, x_agent_secret)
 
     @app.post("/hooks/n8n/sponsorship", status_code=201)
     def sponsorship_mail(body: InboundMail, x_agent_secret: str | None = Header(default=None)) -> dict:
@@ -723,7 +783,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return sorted(name for name in needed if name and not os.environ.get(name))
 
     @app.get("/new", response_class=HTMLResponse)
-    def new_work_page(notice: str = "") -> str:
+    def new_work_page(notice: str = "", skill: str = "") -> str:
         names = engine.harness.clients.list_clients()
         options = "".join(f'<option value="{escape(n)}">{escape(n)}</option>' for n in names)
         client_fields = f"""
@@ -766,6 +826,22 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
       <select name="discipline"><option value="designer">a designer</option><option value="copywriter">a copywriter</option></select></label>
     <label>Kind of work (for example outdoor, social, deck) <input type="text" name="work_kind" maxlength="40"/></label>
     <button class="approve">Review this work</button>
+  </form>
+</section>
+<section class="card" id="skill">
+  <h2>Run a skill</h2>
+  <p>A repeatable piece of work, done to its own written rubric. The agent works from your request and the material you
+   give it, and reads no web page. The result comes to Review; approved, it is saved to the workstream's folder.</p>
+  <form method="post" action="/new" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="workflow" value="skill"/>
+    <label>Skill <select name="skill">{"".join(
+        f'<option value="{name}"{" selected" if name == skill else ""}>{escape(label)}</option>'
+        for name, label in skill_run.SKILLS.items())}</select></label>{client_fields}
+    <label>Your request <textarea name="request" rows="3" maxlength="8000" required></textarea></label>
+    <label>Material <span class="or">paste the plan, the copy, the coverage, the figures</span>
+      <textarea name="material" rows="6" maxlength="60000"></textarea></label>
+    <label>Or files (PDF, Word or text) <input type="file" name="source_files" multiple/></label>
+    <button class="approve">Run this skill</button>
   </form>
 </section>
 <section class="card" id="draft">
@@ -849,6 +925,19 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 "document_type": text("document_type") if text("document_type") in ("strategy", "brief", "memo") else "strategy",
                 "audience": text("audience") or None, "source_paths": sources,
             }
+        elif workflow == "skill":
+            if text("skill") not in skill_run.SKILLS:
+                return back("Choose a skill from the list.")
+            if not text("request"):
+                return back("Say what you want done.")
+            sources = await stored("source_files")
+            if isinstance(sources, str):
+                return back(sources)
+            if not sources and not text("material"):
+                return back("Give the agent material to work from: paste it, or add a file.")
+            workflow = text("skill")
+            inputs = {"request": text("request"), "material": text("material").replace("\r\n", "\n")[:60_000],
+                      "source_paths": sources}
         else:
             return back("That kind of work is not one the agent does.")
 
@@ -1412,6 +1501,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         "creative-review": ("Creative", "c-rose"), "sponsorship-triage": ("Sponsorship", "c-amber"),
         "call-change": ("Calls", "c-emerald"), "think": ("Think", "c-purple"),
         "agency-dispatch": ("Dispatch", "c-emerald"),
+        **{name: (label, "c-purple") for name, label in skill_run.SKILLS.items()},
     }
     STATUS_WORDS = {
         "waiting_for_approval": "waiting for you", "waiting_for_input": "has questions for you",
@@ -1583,10 +1673,12 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     # The fifteen repeatable workflows the owner names. Those with an agent workflow behind
     # them open it; the others start a Think question, which is what the agent can do for them today.
     SKILL_LIST = (
-        ("Campaign Review", None), ("Creative Review", "/new#creative"), ("Copy Review", None),
+        ("Campaign Review", "/new?skill=campaign-review#skill"), ("Creative Review", "/new#creative"),
+        ("Copy Review", "/new?skill=copy-review#skill"),
         ("Strategic Recommendation", "/new#draft"), ("Proposal Review", None), ("Approval Memo", "/new#draft"),
-        ("Executive Email", None), ("Reputation Assessment", None), ("Media Summary", None),
-        ("Competitor Analysis", None), ("Marketing Brief", "/new#brief"), ("Executive Update", None),
+        ("Executive Email", "/new?skill=executive-email#skill"), ("Reputation Assessment", "/new?skill=reputation-assessment#skill"),
+        ("Media Summary", None), ("Competitor Analysis", "/new?skill=competitor-analysis#skill"),
+        ("Marketing Brief", "/new#brief"), ("Executive Update", "/new?skill=executive-update#skill"),
         ("Research Synthesis", None), ("Task Prioritisation", None), ("Follow-up Management", None),
     )
     STARTERS = ("What needs my attention in this workstream?", "Challenge this campaign idea.",

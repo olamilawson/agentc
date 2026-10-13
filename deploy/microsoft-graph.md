@@ -94,20 +94,37 @@ After that, approved replies and agency briefs go out through the mailbox
 instead of waiting in the outbox. Mail already in the outbox is not sent
 after the fact: send those by hand, or dispatch them again.
 
-## 7. Point the n8n watcher at the agent
+## 7. Turn on the watcher for new mail
 
-n8n watches the mailbox with its own Outlook credential and posts each new
-mail to `https://ijeoma.pro/hooks/n8n/sponsorship` with the header
-`x-agent-secret`. Map the fields this way:
+The agent sees a new sponsorship mail when n8n hands it over. One command sets
+up the app's side and loads the watcher into this server's n8n:
 
-| Field the agent expects | From the Outlook message |
-|---|---|
-| `message_id` | `id` (the Graph message id, so the reply joins the thread) |
-| `sender` | `from.emailAddress.address` |
-| `sender_name` | `from.emailAddress.name` |
-| `subject` | `subject` |
-| `body` | the body as plain text |
-| `received_at` | `receivedDateTime` |
+```bash
+cd /opt/personal-agent && git pull && ./deploy/setup.sh --watcher
+```
+
+It creates a secret that the app and n8n share, stores it in n8n's own
+encrypted credentials without showing it, and imports the workflow
+`deploy/n8n-sponsorship-watcher.json`, switched off. Then, in n8n:
+
+1. Open "Personal agent: sponsorship mailbox watcher". On its first step, choose
+   your Microsoft Outlook login, or create one; n8n walks you through the
+   Microsoft sign-in. If the mailbox holds more than sponsorship mail, set a
+   folder filter on that step.
+2. Switch the workflow to Active.
+
+The watcher checks the mailbox each minute and posts each new message, as
+Microsoft describes it, to `https://ijeoma.pro/hooks/n8n/outlook` with the
+header `x-agent-secret`. The agent turns an HTML mail into text, ignores a
+message it has already taken, and starts a triage run that ends in Review.
+
+By hand, if the import does not take: import the JSON file in n8n, create a
+"Header Auth" credential named "Personal agent hook" with the header name
+`x-agent-secret` and the value of `PERSONAL_AGENT_N8N_SECRET` from
+`/opt/personal-agent/.env`, and choose it on the second step.
+
+The older hook, `/hooks/n8n/sponsorship`, still takes the six mapped fields
+(`message_id`, `sender`, `sender_name`, `subject`, `body`, `received_at`).
 
 ## How a send behaves
 
