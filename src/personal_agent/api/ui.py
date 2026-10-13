@@ -99,7 +99,14 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .brand small { display: block; margin-top: 2px; color: var(--rail-text); font-size: 10px; font-weight: 500; letter-spacing: .1em; }
 .brand .mark { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #6366f1, #7e22ce); display: flex;
   align-items: center; justify-content: center; font-size: 16px; font-weight: 700; flex: none; letter-spacing: 0; }
-.rail-scroll { flex: 1; overflow-y: auto; padding: 8px 12px 0; }
+.rail { overflow-y: auto; }
+/* On a short window the whole rail scrolls; the list never slides under the foot. */
+.rail-scroll { flex: 1 0 416px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 8px 12px 0; }
+.rail nav, .rail h2 { flex: none; }
+.streams { flex: 1; min-height: 104px; overflow-y: auto; padding-bottom: 20px; scrollbar-width: thin; scrollbar-color: #334155 transparent;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); }
+.streams::-webkit-scrollbar { width: 6px; } .streams::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
 .rail nav { display: flex; flex-direction: column; gap: 4px; }
 .rail a, .rail button { display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 0 12px; border-radius: 8px;
   color: var(--rail-text); text-decoration: none; font: 500 14px var(--sans); background: none; border: 0; cursor: pointer;
@@ -118,8 +125,8 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .streams p { margin: 0; padding: 0 12px; font-size: 12px; }
 .badge { width: 20px; height: 20px; border-radius: 4px; color: #fff; display: flex; align-items: center; justify-content: center;
   font-size: 10px; font-weight: 600; flex: none; }
-.rail-foot { padding: 12px; border-top: 1px solid var(--rail-line); display: flex; flex-direction: column; gap: 2px; }
-.rail-foot a, .rail-foot button { font-size: 12px; min-height: 34px; }
+.rail-foot { flex: none; padding: 8px 12px; border-top: 1px solid var(--rail-line); display: flex; flex-direction: column; gap: 0; }
+.rail-foot a, .rail-foot button { font-size: 12px; min-height: 32px; }
 .rail-foot form { margin: 0; }
 
 /* --- the page --- */
@@ -169,6 +176,7 @@ code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .disc.emerald { background: var(--emerald-tint); color: var(--emerald-ink); }
 .hero.clear { border-color: var(--clear-edge); background: var(--hero-clear); }
 .hero.clear .myview { color: var(--emerald-ink); }
+.hero.clear .disc { background: var(--chip-emerald); }
 .struck { text-decoration: line-through; color: var(--muted) !important; }
 .num svg.i { width: 14px; height: 14px; }
 .toast { display: flex; align-items: center; gap: 14px; padding: 14px 18px; margin: 0 0 16px; border-radius: 16px; background: #0d1527; color: #e2e8f0;
@@ -191,15 +199,18 @@ code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .metric b + span { display: block; font-size: 14px; font-weight: 600; color: var(--strong); margin-top: 4px; }
 .metric small { color: var(--muted); font-size: 12px; }
 .metric > svg.i { color: var(--muted); }
-.columns { display: grid; grid-template-columns: 5fr 3.5fr 3.5fr; gap: 24px; align-items: start; margin-top: 24px; }
+.columns { display: grid; grid-template-columns: 5fr 3.5fr 3.5fr; gap: 24px; align-items: stretch; margin-top: 24px; }
 .columns.two { grid-template-columns: 1fr 1fr; }
 .columns .card { margin: 0; }
 .chips + h3 { margin-top: 10px; }
-form.route { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr; gap: 12px 16px; align-items: end; padding: 16px 0; margin: 0; }
+form.route { display: grid; grid-template-columns: minmax(200px, 1.1fr) repeat(3, minmax(0, 1fr)); gap: 12px 16px; align-items: start;
+  padding: 20px 0; margin: 0; }
+form.route:first-of-type { padding-top: 0; } form.route:last-of-type { padding-bottom: 0; }
+form.route h3 { margin: 0; font: 600 14px/16px var(--sans); } form.route .meta { margin: 6px 0 0; line-height: 1.4; }
 form.route + form.route { border-top: 1px solid var(--line-strong); }
-form.route label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; min-width: 0; }
-form.route select, form.route input { width: 100%; }
-form.route .actions { grid-column: 1 / -1; margin: 0; }
+form.route label { display: flex; flex-direction: column; gap: 8px; font: 600 12px/16px var(--sans); min-width: 0; white-space: nowrap; }
+form.route select, form.route input { width: 100%; height: 44px; }
+form.route .actions { grid-column: 2 / -1; margin: 0; gap: 8px; }
 .rows { margin: 0; padding: 0; list-style: none; }
 .rows li + li { border-top: 1px solid var(--line); }
 .rows a, .rows .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 12px; margin: 0 -12px;
@@ -287,7 +298,7 @@ details.add[open] > summary { margin-bottom: 12px; }
 .principles { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .principles li { display: flex; gap: 12px; align-items: flex-start; }
 .principles b { font: 500 17px/1.35 var(--serif); color: var(--ink); }
-.columns.think { grid-template-columns: 1.7fr 1fr; }
+.columns.think { grid-template-columns: 1.7fr 1fr; align-items: start; }
 .columns.think .card + .card, .columns.think h2 + .card { margin-top: 16px; }
 .columns.one { grid-template-columns: 1fr; }
 
@@ -410,6 +421,7 @@ td { font-variant-numeric: tabular-nums; }
 
 /* Phone width: the rail becomes a bar across the top, and nothing scrolls sideways. */
 @media (max-width: 1100px) { .columns, .columns.two, .columns.think, form.route { grid-template-columns: 1fr; }
+  form.route .actions { grid-column: 1; }
   .board, .board.six, .signals, .principles { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 860px) {
   .rail { position: static; width: auto; border-right: 0; }
@@ -418,7 +430,7 @@ td { font-variant-numeric: tabular-nums; }
   .facts { grid-template-columns: 1fr; gap: 12px; } .facts > div + div { border-left: 0; border-top: 1px solid var(--line-strong); padding-top: 12px; }
   form.stack label.tick { min-height: 44px; }
   .crumb a { display: inline-flex; align-items: center; min-height: 44px; }
-  .rail-scroll { padding: 0 8px 8px; overflow: visible; }
+  .rail { overflow: visible; } .rail-scroll { display: block; flex: none; padding: 0 8px 8px; overflow: visible; }
   .rail nav { flex-direction: row; flex-wrap: wrap; }
   .rail a, .rail button { width: auto; min-height: 44px; }
   .rail h2, .streams { display: none; }
