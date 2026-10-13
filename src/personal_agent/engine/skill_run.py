@@ -46,7 +46,7 @@ SKILLS = {
 }
 # This one looks at pictures: its files are shown to the model as images, not read as text.
 VISION_SKILLS = {"logo-critique"}
-MAX_IMAGES = 8
+MAX_IMAGES = 8  # never more; the setting for pages in one call lowers it
 # These two work from the workstream's own open tasks, so they can run with nothing pasted.
 TASK_SKILLS = {"task-prioritisation", "follow-up-management"}
 MAX_REVISIONS = 3
@@ -156,7 +156,8 @@ def build_skill_graph(skill: str, h):
         images = None
         if skill in VISION_SKILLS:
             pages = h.render_work(state["client"], list(inputs.get("source_paths") or []))
-            images = [(f"Image {p.number} ({p.source})", p.image) for p in pages if p.image][:MAX_IMAGES]
+            limit = min(MAX_IMAGES, h.settings.creative_review.pages_per_group)
+            images = [(f"Image {p.number} ({p.source})", p.image) for p in pages if p.image][:limit]
             if not images:
                 raise StepFailed("none of the files could be shown as an image; give a PNG, a JPG or a PDF")
         out, usage = steps.run_model(

@@ -23,8 +23,8 @@ models:
 
   # Open-weight, hosted by someone else. Larger and faster than this server can
   # run. The text goes to that host, under its terms and its free-use limits.
-  - {id: groq/llama-3.1-8b-instant, label: "Llama 3.1 8B Instant, hosted by Groq", key: GROQ_API_KEY, open: true}
-  - {id: groq/llama-3.3-70b-versatile, label: "Llama 3.3 70B, hosted by Groq", key: GROQ_API_KEY, open: true}
   - {id: groq/openai/gpt-oss-120b, label: "gpt-oss 120B, hosted by Groq", key: GROQ_API_KEY, open: true}
-  - {id: groq/meta-llama/llama-4-scout-17b-16e-instruct, label: "Llama 4 Scout, reads images, hosted by Groq", key: GROQ_API_KEY, open: true}
+  - {id: groq/openai/gpt-oss-20b, label: "gpt-oss 20B, hosted by Groq", key: GROQ_API_KEY, open: true}
+  - {id: groq/qwen/qwen3.8-27b, label: "Qwen 3.8 27B, reads images, hosted by Groq (preview)", key: GROQ_API_KEY, open: true}
+  - {id: groq/minimaxai/minimax-m2.7, label: "MiniMax M2.7, hosted by Groq (preview)", key: GROQ_API_KEY, open: true}
   - {id: "openrouter/meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B, hosted through OpenRouter", key: OPENROUTER_API_KEY, open: true}

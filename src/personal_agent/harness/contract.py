@@ -51,14 +51,22 @@ def _parse_json(raw: str) -> dict:
     import json
     import re
 
-    text = raw.strip()
+    # Open-weight models often think aloud, or add a line before or after the object.
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
     if fence:
         text = fence.group(1)
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as e:
-        raise OutputInvalid(f"output was not valid JSON: {e}") from e
+        # One object with words around it: take the object. The schema still has to accept it.
+        start = text.find("{")
+        try:
+            if start < 0:
+                raise e
+            parsed, _ = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError:
+            raise OutputInvalid(f"output was not valid JSON: {e}") from e
     if not isinstance(parsed, dict):
         raise OutputInvalid("output was not a JSON object")
     return parsed

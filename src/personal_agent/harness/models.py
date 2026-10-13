@@ -8,6 +8,9 @@ that replays recorded responses, so tests never call a provider.
 
 from __future__ import annotations
 
+import re
+import time
+
 from personal_agent.config import TierRoute
 from personal_agent.harness.contract import StepContract, StepFailed
 
@@ -18,6 +21,24 @@ class ProviderError(Exception):
 
 class ProviderNotApproved(StepFailed):
     """A restricted client's material may not go to any model this tier routes to."""
+
+
+# A provider that says "too many requests this minute" is asked again after a wait, a few times.
+RATE_LIMIT_TRIES, MAX_WAIT_SECONDS = 4, 45.0
+SLEEP = time.sleep  # tests replace it
+
+
+def rate_limit_wait(error: Exception) -> float | None:
+    """Seconds to wait before asking again, or None when asking again will not help.
+    An account with no credit also answers "rate limit"; waiting does not fix that."""
+    text = str(error).lower()
+    if not any(mark in text or mark in type(error).__name__.lower() for mark in ("ratelimit", "rate limit", "429")):
+        return None
+    if any(word in text for word in ("credit", "quota", "billing", "per day", "tokens per day", "requests per day")):
+        return None
+    named = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", text)
+    seconds = (int(named.group(1) or 0) * 60 + float(named.group(2))) if named else 15.0
+    return min(seconds + 1.0, MAX_WAIT_SECONDS)
 
 
 def provider_of(model: str) -> str:
@@ -112,15 +133,22 @@ class ModelGateway:
             {"role": "system", "content": contract.instruction + "\n\n" + context},
             {"role": "user", "content": user},
         ]
-        try:
-            response = litellm.completion(
-                model=model,
-                messages=messages,
-                max_tokens=contract.limits.max_tokens,
-                timeout=contract.limits.timeout_seconds,
-            )
-        except Exception as e:  # provider/SDK errors — never a silent model swap without the route table
-            raise ProviderError(f"{model}: {e}") from e
+        response = None
+        for attempt in range(RATE_LIMIT_TRIES):
+            try:
+                response = litellm.completion(
+                    model=model,
+                    messages=messages,
+                    max_tokens=contract.limits.max_tokens,
+                    timeout=contract.limits.timeout_seconds,
+                )
+                break
+            except Exception as e:  # provider/SDK errors — never a silent model swap without the route table
+                wait = rate_limit_wait(e)
+                if wait is None or attempt == RATE_LIMIT_TRIES - 1:
+                    raise ProviderError(f"{model}: {e}") from e
+                # The provider's minute is spent. The same request, to the same model, after the wait it names.
+                SLEEP(wait)
 
         raw = response.choices[0].message.content or ""
         usage = getattr(response, "usage", None)

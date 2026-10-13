@@ -85,3 +85,56 @@ def test_a_step_with_pictures_goes_to_the_vision_route_and_a_text_step_does_not(
     assert gateway.complete(contract, "context", images=[("Page 1", b"jpeg")])["model"] == "groq/text-model"
     with __import__("pytest").raises(Exception, match="not approved for confidential work"):
         gateway.complete(contract, "context", providers={"anthropic"})  # a restricted client still stops here
+
+
+def test_a_spent_minute_is_waited_out_and_an_account_with_no_credit_is_not():
+    import litellm
+
+    from personal_agent.engine.think import think_contracts
+    from personal_agent.harness import models
+
+    assert models.rate_limit_wait(Exception("RateLimitError: Rate limit reached. Please try again in 7.5s.")) == 8.5
+    assert models.rate_limit_wait(Exception("RateLimitError: try again in 2m10s")) == models.MAX_WAIT_SECONDS
+    assert models.rate_limit_wait(Exception("RateLimitError: You have no credits remaining.")) is None
+    assert models.rate_limit_wait(Exception("Rate limit reached for tokens per day (TPD)")) is None  # a day will not pass
+    assert models.rate_limit_wait(Exception("model_not_found")) is None
+
+    class Reply:
+        usage = None
+
+        class _Choice:
+            class message:
+                content = 'Here it is: {"answer": "Lead with the rate.", "caveats": []} Hope that helps.'
+
+        choices = [_Choice]
+
+    calls, waits = [], []
+
+    def completion(**kwargs):
+        calls.append(kwargs["model"])
+        if len(calls) < 3:
+            raise RuntimeError("RateLimitError: Rate limit reached. Please try again in 3s.")
+        return Reply()
+
+    real, models.SLEEP, litellm_real = models.SLEEP, waits.append, litellm.completion
+    litellm.completion = completion
+    try:
+        contract = next(iter(think_contracts().values()))
+        out = models.ModelGateway({"standard": models.TierRoute(primary="groq/openai/gpt-oss-120b")}).complete(contract, "context")
+    finally:
+        models.SLEEP, litellm.completion = real, litellm_real
+    assert calls == ["groq/openai/gpt-oss-120b"] * 3 and waits == [4.0, 4.0]  # the same model, after the wait Groq named
+    assert out["data"] == {"answer": "Lead with the rate.", "caveats": []}  # the object, without the words around it
+
+
+def test_thinking_aloud_before_the_object_is_set_aside():
+    from personal_agent.harness.contract import OutputInvalid, _parse_json
+
+    assert _parse_json('<think>The user wants JSON.</think>\n{"a": 1}') == {"a": 1}
+    assert _parse_json('```json\n{"a": 1}\n```') == {"a": 1}
+    import pytest
+
+    with pytest.raises(OutputInvalid):
+        _parse_json("I could not do that.")
+    with pytest.raises(OutputInvalid):
+        _parse_json("[1, 2]")

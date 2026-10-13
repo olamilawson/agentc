@@ -1,37 +1,40 @@
 # Model route table — tiers map to providers; changing a model never changes code.
 #
 # The mix for a minimally working agent (owner's decision, 2026-10-13): every
-# tier on Groq, whose key is the one on the server that works, with a different
-# model for each tier. Groq counts its free limits for each model, so three
-# models give three allowances; and the strong tier checks the standard tier's
-# work, which a different model does better than the same one.
+# tier on Groq, whose key is the one on the server that works.
+#
+# The model ids were checked against Groq's published list and its deprecation
+# page on 2026-10-13. Groq shut down llama-3.1-8b-instant, llama-3.3-70b-versatile
+# and llama-4-scout for free accounts in July and August 2026, which is why an
+# earlier version of this file failed. gpt-oss-120b is the one model the owner's
+# account has answered from; the others here are still to be tested on the
+# Settings and cost screen. A choice saved on that screen replaces a line here.
 #
 # Groq hosts open-weight models; the text of each step goes to Groq under its
 # terms, so restricted clients stay off it until Groq is listed in
 # config/providers.yaml.
 #
-# The model names are from memory and have not been checked against the
-# account. Use "Test this model" on the Settings and cost screen. A choice saved
-# on that screen replaces the line here for its tier.
+# Limits, from Groq's page for its base paid plan (the free plan's are in the
+# account's own console): 8,000 tokens a minute and 200,000 a day for each
+# model. The gateway waits and tries again when Groq says the minute is spent.
 #
-# No fallback is named. A fallback is used only on provider error, and one that
-# points at a provider with no credit would fail too and report its own error
-# in place of the real one. Add `fallback:` lines once a second provider works.
+# No fallback is named: one that points at a provider with no credit would fail
+# and report its own error in place of the real one.
 #
-# Scaling up, in order: move strong to a paid model first (few, short steps that
-# gate what is sent), then standard, then add fallbacks. Leave cheap here.
+# Scaling up, in order: move strong to a paid model from another provider first,
+# so that one model checks another's work; then standard; then add fallbacks.
 
-# Extracting fields, classifying mail, sorting headlines. If these steps fail
-# with "invalid output", this small model is the cause: use the standard one.
+# Extracting fields, classifying mail, sorting headlines.
 cheap:
-  primary: groq/llama-3.1-8b-instant
+  primary: groq/openai/gpt-oss-20b
 # Drafting, scoring, Think, the skills.
 standard:
-  primary: groq/llama-3.3-70b-versatile
+  primary: groq/openai/gpt-oss-120b
 # Checking evidence and replies, and the weekly learning review.
 strong:
   primary: groq/openai/gpt-oss-120b
 # Steps that show the model a picture (creative review, logo critique) use this
-# route whatever their tier, because the models above read text alone.
+# route whatever their tier. It is Groq's one model that reads images, a preview
+# model, and it takes three images a request at most.
 vision:
-  primary: groq/meta-llama/llama-4-scout-17b-16e-instruct
+  primary: groq/qwen/qwen3.8-27b

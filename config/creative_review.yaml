@@ -5,7 +5,9 @@
 
 # Longest edge of a page image, in pixels.
 image_max_edge: 1024
-# Pages sent to the model in one scoring call.
-pages_per_group: 6
+# Pages sent to the model in one scoring call. Two, because the vision model on
+# Groq takes three images a request at most and counts each as 2,048 tokens
+# against a limit of 8,000 a minute. Raise it with a provider that allows more.
+pages_per_group: 2
 # A run with more pages than this stops with a clear reason.
 max_pages: 40
