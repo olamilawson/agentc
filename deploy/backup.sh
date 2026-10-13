@@ -58,7 +58,9 @@ if [ "${tar_code:-0}" -gt 1 ]; then
 fi
 
 # 3. Read it back before it counts
-if ! tar -tzf "$FILE" | grep -qx "db.sql"; then
+# The listing goes to a file first. Piped straight into a search that stops at its first match,
+# tar is cut off mid-listing on a large archive, and that looked like a failed read.
+if ! tar -tzf "$FILE" > "$WORK/listing" 2>/dev/null || ! grep -qx "db.sql" "$WORK/listing"; then
   rm -f "$FILE"
   echo "backup failed: the archive could not be read back, so it was removed"
   exit 1

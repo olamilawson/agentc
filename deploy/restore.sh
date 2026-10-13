@@ -122,7 +122,7 @@ fi
 say "Backing up the present state"
 SAFETY=""
 if ./deploy/backup.sh; then
-  SAFETY=$(ls -1t "$DIR"/backup-*.tar.gz | head -n 1)
+  SAFETY=$(ls -1t "$DIR"/backup-*.tar.gz | sed -n 1p)  # sed reads the whole list, so ls is never cut off
 else
   printf 'The present state could not be backed up. Type restore anyway to go on without one: '
   read -r answer
