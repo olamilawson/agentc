@@ -357,6 +357,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         response.delete_cookie(auth.SESSION_COOKIE, path="/")
         return response
 
+    UP = {"Agent work": "/work", "Agency dispatch": "/work", "Studio": "/work", "Dispatch log": "/dispatch"}
+
     def _zone() -> ZoneInfo:
         return ZoneInfo(settings.calendar.timezone)
 
@@ -364,9 +366,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         agency_dispatch.release_due(engine)
         waiting = len(db.list_runs(status="waiting_for_approval")) + len(db.list_runs(status="waiting_for_input"))
         today = datetime.now(_zone())
+        # Where "back" leads when the browser has no earlier page of this site to return to.
+        up = None if active == "home" else UP.get(title) or ("/inspect" if title.startswith("Run ") else "/")
         return ui.page(
             title, active, body, brand=settings.brand_name, waiting=waiting, today_count=ws_api.open_count(),
-            signed_in=guard is not None, script=script, refresh=refresh, dock=dock,
+            signed_in=guard is not None, script=script, refresh=refresh, dock=dock, up=up,
             clients=engine.harness.clients.list_clients(), today=f"{today:%A}, {today.day} {today:%B %Y}",
         )
 

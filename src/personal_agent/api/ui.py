@@ -137,6 +137,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 32px; color: var(--muted); font-size: 12px; }
 .topbar .private { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; }
 .topbar .private svg.i { width: 12px; height: 12px; }
+.back { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px 0 10px; margin-right: 8px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: 600 12px var(--sans); letter-spacing: 0;
+  text-transform: none; text-decoration: none; }
+.back:hover { border-color: var(--edge); } .topbar .private .back svg.i { width: 14px; height: 14px; }
 .topbar .right { display: flex; align-items: center; gap: 24px; text-align: right; }
 .topbar .date { color: var(--text); font-weight: 500; }
 .topbar .tagline { font-size: 11px; }
@@ -439,7 +443,8 @@ td { font-variant-numeric: tabular-nums; }
   .rail h2, .streams { display: none; }
   .rail-foot { flex-direction: row; flex-wrap: wrap; padding: 4px 8px 8px; }
   .page { margin: 0; }
-  .topbar { padding: 12px 16px; } .topbar .tagline, .topbar .private span { display: none; }
+  .topbar { padding: 12px 16px; } .topbar .tagline, .topbar .private > span { display: none; }
+  .back { min-height: 44px; }
   .bell { min-height: 44px; min-width: 44px; } .theme { width: 44px; min-height: 44px; }
   main { padding: 8px 16px 48px; } main.has-dock { padding-bottom: 24px; }
   h1 { font-size: 28px; }
@@ -487,6 +492,7 @@ _ICONS = {
     "today": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     "think": '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.8.8 1.2 1.6 1.4 2.5h5.2c.2-.9.6-1.7 1.4-2.5A6 6 0 0 0 12 3z"/>',
     "intelligence": '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    "back": '<path d="M19 12H5M11 6l-6 6 6 6"/>',
     "moon": '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
     "draft": '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13 7 4 4"/>',
 }
@@ -501,6 +507,16 @@ ICON_LINKS = ('<link rel="icon" type="image/svg+xml" href="/static/brand/favicon
               '<link rel="apple-touch-icon" href="/static/brand/tile-180.png"/>')
 THEME_HEAD = """<script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.dataset.theme='dark'}catch(e){}</script>"""
 THEME_SCRIPT = """<script>
+(function () {
+  var back = document.querySelector('[data-back]');
+  if (back) back.addEventListener('click', function (e) {
+    var from = document.referrer ? new URL(document.referrer) : null;
+    if (from && from.origin === location.origin && from.pathname !== location.pathname && history.length > 1) {
+      e.preventDefault();
+      history.back();
+    }
+  });
+})();
 (function () {
   var button = document.getElementById('theme'), root = document.documentElement;
   if (!button) return;
@@ -557,7 +573,7 @@ FOOT = [
 
 def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, signed_in: bool = False,
          script: str = "", refresh: int = 0, clients: list[str] | None = None, today: str = "",
-         dock: str = "", today_count: int = 0) -> str:
+         dock: str = "", today_count: int = 0, up: str | None = None) -> str:
     """One screen inside the shell. `waiting` is the number of items that need the
     owner's decision; `clients` are listed in the rail as workstreams; `dock` is
     the bar fixed to the bottom of the home screen."""
@@ -595,7 +611,8 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
 </header>
 <div class="page">
   <div class="topbar">
-    <div class="private">{icon("lock")}<span>Your private executive space</span></div>
+    <div class="private">{f'<a class="back" href="{up}" data-back aria-label="Back">{icon("back")}<span>Back</span></a>' if up else ""}
+      {icon("lock")}<span>Your private executive space</span></div>
     <div class="right">
       <a class="bell{" on" if waiting else ""}" href="/queue" aria-label="{waiting} waiting for your decision">{icon("bell")}</a>
       <div><div class="date">{escape(today)}</div><div class="tagline">A little clarity. A lot of possibility.</div></div>

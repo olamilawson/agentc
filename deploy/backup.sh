@@ -32,19 +32,30 @@ FILE="$DIR/backup-$STAMP.tar.gz"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 umask 077
-mkdir -p "$DIR"
+if ! mkdir -p "$DIR" 2>/dev/null || ! [ -w "$DIR" ]; then
+  echo "backup failed: $DIR cannot be written to. Run this as root, as the scheduled job does"
+  exit 1
+fi
 chmod 700 "$DIR"
 
 # 1. The database: the app's tables and the paused runs' checkpoints
-docker compose exec -T postgres pg_dump -U personal_agent personal_agent > "$WORK/db.sql" || true
+docker compose exec -T postgres pg_dump -U personal_agent personal_agent > "$WORK/db.sql" 2> "$WORK/dump.err" || true
 if ! grep -q "PostgreSQL database dump complete" "$WORK/db.sql"; then
-  echo "backup failed: the database dump did not finish, so no archive was kept"
+  why=$(grep -v '^[[:space:]]*$' "$WORK/dump.err" | tail -n 1 | cut -c1-200)
+  echo "backup failed: the database dump did not finish, so no archive was kept. The database said: ${why:-nothing}"
   exit 1
 fi
 
 # 2. One archive: the dump and the client folders
 mkdir -p data
-tar -czf "$FILE" -C "$WORK" db.sql -C "$COMPOSE_DIR" data
+# The job notes in data/jobs are rewritten each minute and are not worth keeping. tar exits 1
+# when some other file changes while it is read; the archive is still whole, and step 3 checks it.
+tar -czf "$FILE" --exclude=data/jobs -C "$WORK" db.sql -C "$COMPOSE_DIR" data 2> "$WORK/tar.err" || tar_code=$?
+if [ "${tar_code:-0}" -gt 1 ]; then
+  rm -f "$FILE"
+  echo "backup failed: the archive could not be written. tar said: $(tail -n 1 "$WORK/tar.err" | cut -c1-200)"
+  exit 1
+fi
 
 # 3. Read it back before it counts
 if ! tar -tzf "$FILE" | grep -qx "db.sql"; then

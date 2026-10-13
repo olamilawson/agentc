@@ -27,6 +27,7 @@ def test_an_empty_home_greets_the_owner_and_says_nothing_waits(settings, monkeyp
     for mode in ("ask", "research", "create", "analyse", "plan", "action"):  # the six things the bar does
         assert f'data-mode="{mode}"' in page
     assert 'id="theme"' in page and "localStorage.getItem('theme')" in page  # the dark theme switch
+    assert "data-back" not in page.split("<script>")[0]  # Home is the top; it has no way back
     assert "http://" not in page and "https://" not in page  # no outside host: fonts and icons ship with the app
 
 
@@ -78,3 +79,13 @@ def test_a_decision_from_the_sheet_returns_the_browser_to_review(settings):
     assert "Declined · recorded" in confirmed and "Kept in Memory with your reason." in confirmed
     assert client.get(f"/runs/{run_id}").json()["status"] != "waiting_for_approval"
     assert "No item needs your decision." in client.get("/queue").text
+
+
+def test_every_screen_but_home_has_a_way_back_that_leads_one_level_up(settings):
+    client = _client(settings)
+    for path, up in (("/today", "/"), ("/work", "/"), ("/queue", "/"), ("/think", "/"), ("/intelligence", "/"),
+                     ("/library", "/"), ("/cost", "/"), ("/inspect", "/"), ("/calendar", "/"), ("/files", "/"),
+                     ("/core", "/"), ("/new", "/work"), ("/dispatch", "/work"), ("/studio", "/work")):
+        page = client.get(path).text
+        assert f'<a class="back" href="{up}" data-back aria-label="Back">' in page, path
+    assert "history.back()" in client.get("/today").text
