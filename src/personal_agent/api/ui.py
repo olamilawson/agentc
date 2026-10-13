@@ -329,6 +329,25 @@ dialog.sheet:not(:modal) { position: static; width: auto; max-width: 768px; max-
 .sheet-foot .actions { margin: 0; }
 .sheet-foot button { display: inline-flex; align-items: center; gap: 8px; }
 
+/* --- a dispatch log: the sheet, laid out as a page --- */
+.sheet-page { max-width: 880px; border: 1px solid var(--line-strong); border-radius: 24px; background: var(--card); overflow: hidden;
+  box-shadow: 0 12px 32px -12px rgba(15, 23, 42, .18); }
+.sheet-page .sheet-strip { background: linear-gradient(90deg, #10b981, #059669); }
+.sheet-page.recalled .sheet-strip { background: linear-gradient(90deg, #f59e0b, #e11d48); }
+.sheet-page h1 { font: 400 26px/1.25 var(--serif); margin: 6px 0 0; overflow-wrap: anywhere; }
+.sheet-page .sheet-body { overflow: visible; }
+.facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; padding: 16px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--well); }
+.facts > div { padding: 0 16px; min-width: 0; } .facts > div + div { border-left: 1px solid var(--line-strong); }
+.facts b { display: block; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; } .facts small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.facts .eyebrow { margin: 0 0 4px; font-size: 10px; }
+.disc.sm { width: 36px; height: 36px; background: var(--subtle); color: var(--slate-ink); } .disc.sm svg.i { width: 16px; height: 16px; }
+.recall { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; border-color: var(--amber); background: var(--amber-tint); color: var(--amber-ink); }
+.recall:hover { background: var(--amber-tint); border-color: var(--amber-ink); }
+fieldset { border: 1px solid var(--line-strong); border-radius: 12px; padding: 12px 16px; margin: 0; }
+legend { font-size: 13px; font-weight: 600; color: var(--ink); padding: 0 6px; }
+form.stack label.tick { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; min-height: 32px; }
+.tick input { width: 18px; height: 18px; }
+
 /* --- content of the other screens --- */
 .strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 0 0 8px; }
 .strip a { display: block; background: var(--card); border: 1px solid var(--line-strong); border-radius: 16px; padding: 16px 20px;
@@ -396,6 +415,9 @@ td { font-variant-numeric: tabular-nums; }
   .rail { position: static; width: auto; border-right: 0; }
   .brand { padding: 16px 16px 8px; } .brand small { display: none; }
   details.add > summary { min-height: 44px; } .toast { flex-wrap: wrap; }
+  .facts { grid-template-columns: 1fr; gap: 12px; } .facts > div + div { border-left: 0; border-top: 1px solid var(--line-strong); padding-top: 12px; }
+  form.stack label.tick { min-height: 44px; }
+  .crumb a { display: inline-flex; align-items: center; min-height: 44px; }
   .rail-scroll { padding: 0 8px 8px; overflow: visible; }
   .rail nav { flex-direction: row; flex-wrap: wrap; }
   .rail a, .rail button { width: auto; min-height: 44px; }

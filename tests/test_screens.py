@@ -151,7 +151,7 @@ def test_a_tested_model_stays_chosen_and_a_refusal_is_put_plainly(settings, monk
 # --- scheduled jobs ---------------------------------------------------------------------
 def test_settings_shows_each_scheduled_job_and_its_last_result(settings):
     client = _client(settings)
-    assert client.get("/cost").text.count("Has not run yet") == 3
+    assert client.get("/cost").text.count("Has not run yet") == 4
     jobs_dir = settings.clients_dir.parent / "jobs"
     jobs_dir.mkdir(parents=True)
     (jobs_dir / "backup.status").write_text("time=2026-10-12T02:15:04Z\nok=yes\ndetail=backup 2026-10-12-0215: 1.2M, 3 kept on this server\n")
@@ -159,7 +159,7 @@ def test_settings_shows_each_scheduled_job_and_its_last_result(settings):
     page = client.get("/cost").text
     assert '<span class="s-done">worked</span> 2026-10-12 02:15:04 UTC' in page and "3 kept on this server" in page
     assert '<span class="s-failed">failed</span>' in page and "a=b &lt;cap&gt;" in page
-    assert page.count("Has not run yet") == 1
+    assert page.count("Has not run yet") == 2
 
 
 # --- the six modes and the dark theme ---------------------------------------------------

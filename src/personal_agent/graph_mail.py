@@ -26,6 +26,7 @@ before that call is definite: nothing was sent.
 
 from __future__ import annotations
 
+import base64
 import time
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -102,7 +103,8 @@ class GraphMail:
         return f"/users/{quote(self.mailbox)}"
 
     # --- release: send a reply ------------------------------------------------------------
-    def send_reply(self, to: str, subject: str, body: str, in_reply_to: str | None = None) -> dict:
+    def send_reply(self, to: str, subject: str, body: str, in_reply_to: str | None = None,
+                   attachments: list[tuple[str, bytes]] | None = None) -> dict:
         """Send exactly this subject and body to exactly this address.
 
         With in_reply_to (the Graph id of the message being answered) the reply
@@ -128,6 +130,12 @@ class GraphMail:
                 self._call("PATCH", f"{base}/messages/{quote(draft_id, safe='')}", ok=(200,), json=content)
             else:
                 draft_id = self._call("POST", f"{base}/messages", ok=(201,), json=content).json()["id"]
+            # Files go onto the draft before it is sent; a refusal here leaves nothing sent.
+            for name, data in attachments or []:
+                self._call("POST", f"{base}/messages/{quote(draft_id, safe='')}/attachments", ok=(201,), json={
+                    "@odata.type": "#microsoft.graph.fileAttachment", "name": name,
+                    "contentBytes": base64.b64encode(data).decode(),
+                })
         except GraphError:
             self._discard(draft_id)
             raise

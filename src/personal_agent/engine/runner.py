@@ -8,6 +8,7 @@ LangGraph checkpoint is durable) and resumes from its last checkpoint.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 import time
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -34,6 +35,7 @@ from personal_agent.engine.sponsorship_triage import (
 )
 from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
 from personal_agent.engine.think import build_think_graph, think_contracts, think_outputs
+from personal_agent.engine import dispatch as agency_dispatch
 from personal_agent.graph_mail import GraphError, GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
 from personal_agent.harness.budgets import BudgetExceeded, BudgetTracker
@@ -134,6 +136,8 @@ class Harness:
         self.tools.register(ToolSpec(name="cancel_calendar_event", cls=ToolClass.RELEASE, fn=self._cancel_event))
         # Read-class: when the owner's calendar is busy. Free and busy times only.
         self.tools.register(ToolSpec(name="read_calendar", cls=ToolClass.READ, fn=self._read_calendar))
+        # Release-class: an approved brief to an agency, with its files from the workstream's folder.
+        self.tools.register(ToolSpec(name=agency_dispatch.TOOL, cls=ToolClass.RELEASE, fn=self._send_agency_brief))
         # Canva and Higgsfield: shells that name their tools and refuse every call for now.
         connectors.register(self.tools, self.db, self.settings)
         # Draft-class: a document in the run's own client folder (reversible).
@@ -183,6 +187,17 @@ class Harness:
         return self.mail.send_reply(
             payload["to"], payload["subject"], payload["body"], payload.get("in_reply_to")
         )
+
+    def _send_agency_brief(self, payload: dict) -> dict:
+        scope = ClientScope(payload["client"])
+        files = [(Path(path).name, self.clients.read_bytes(scope, path)) for path in payload["attachments"]]
+        if self.mail is None:
+            # No mailbox: the approved brief is kept, with the names of its files, for sending by hand.
+            listed = ("\n\nFiles to attach: " + ", ".join(payload["attachments"])) if files else ""
+            outbox_id = self.db.add_to_outbox(payload["to"], payload["subject"], payload["body"] + listed, None)
+            return {"sent": False, "outbox_id": outbox_id,
+                    "note": "Microsoft Graph is not connected; the approved brief is held in the local outbox."}
+        return self.mail.send_reply(payload["to"], payload["subject"], payload["body"], attachments=files)
 
     def _search_mail(self, payload: dict) -> dict:
         if self.mail is None:
@@ -305,6 +320,9 @@ WORKFLOWS: dict[str, Workflow] = {
     "strategy-drafting": Workflow(build_drafting_graph, drafting_outputs, revises=True),
     "call-change": Workflow(build_call_change_graph, call_change_outputs),
     "think": Workflow(build_think_graph, think_outputs),
+    agency_dispatch.WORKFLOW: Workflow(
+        agency_dispatch.build_dispatch_graph, agency_dispatch.dispatch_outputs, agency_dispatch.dispatch_rejected
+    ),
 }
 
 

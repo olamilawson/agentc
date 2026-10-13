@@ -98,7 +98,9 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
                 "status": "awaiting_approval" if waiting else "done" if r["status"] == "done"
                           else "todo" if r["status"] == "failed" else "in_progress",
                 "risk": "high" if r["status"] == "failed" else None, "owner": "Agent", "due": None, "tag": label,
-                "href": f"/queue#d-{r['id']}" if waiting else f"/inspect/{r['id']}",
+                "href": f"/queue#d-{r['id']}" if waiting
+                        else f"/dispatch/{(r['outputs'] or {}).get('dispatch_id')}" if (r["outputs"] or {}).get("dispatch_id")
+                        else f"/inspect/{r['id']}",
             })
         if ws:
             out = [i for i in out if i["ws"] == ws]
@@ -273,7 +275,8 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
 <p class="lede">One view of everything moving across your workstreams.</p>
 {ws_chips("/work", ws, f=f)}
 <div class="toolbar">{tabs("/work", ws, f)}
-  <a class="button approve" href="/new">{icon("spark")}Give the agent work</a></div>
+  <span class="actions"><a class="button" href="/dispatch">{icon("arrow")}Agency dispatch</a>
+    <a class="button approve" href="/new">{icon("spark")}Give the agent work</a></span></div>
 {new_task_form(path, ws)}
 <div class="board">{columns}</div>
 {edit_sheets(found, path)}

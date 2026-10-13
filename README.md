@@ -83,6 +83,15 @@ this repository implements **Delivery phase 1: Foundation**.
   Intelligence is a watchlist the owner fills; no feed is connected. The nine
   workstreams in `config/workstreams.yaml` are created once. Nothing is sample
   data.
+- **Agency dispatch** — `engine/dispatch.py` and `api/dispatches.py`, after the
+  owner's Stitch designs. The owner writes a brief for an agency and picks its
+  files; no model is involved. The exact mail waits for approval, is then held
+  for a window (15 minutes unless set otherwise), and is sent through the tool
+  gateway as a release when the window ends, by the each-minute cron job or
+  when a screen is opened. Inside the window a recall stops it and nothing
+  leaves. After it has gone, a recall prepares a halt notice, which the owner
+  approves like any other release. Each dispatch has a log page and a text
+  receipt. With no mailbox connected the approved brief goes to the outbox.
 - **Models** — each step belongs to a tier (cheap, standard, strong). The
   Settings and cost screen routes each tier to a model from
   `config/models.yaml` or to any typed id, saves the choice in the database

@@ -26,6 +26,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Minutes an approved agency brief is held before it is sent. Empty: 15.
+      PERSONAL_AGENT_DISPATCH_HOLD_MINUTES: ${PERSONAL_AGENT_DISPATCH_HOLD_MINUTES:-}
       # Connectors (src/personal_agent/connectors.py). Empty: not connected.
       CANVA_CLIENT_ID: ${CANVA_CLIENT_ID:-}
       CANVA_CLIENT_SECRET: ${CANVA_CLIENT_SECRET:-}

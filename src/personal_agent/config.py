@@ -104,6 +104,8 @@ class Settings(BaseModel):
     workstreams: list[Workstream] = []
     # The models the Settings screen offers for each tier's route.
     model_catalogue: list[ModelChoice] = []
+    # Minutes an approved agency brief is held before it is sent; the owner can recall it in that time.
+    dispatch_hold_minutes: int = 15
     # The name shown in the rail and the page titles.
     brand_name: str = "Chidimma OS"
     # The name the home screen greets.
@@ -157,6 +159,7 @@ def load_settings() -> Settings:
         core=CoreSettings(**from_yaml("PERSONAL_AGENT_CORE", "core.yaml")),
         workstreams=[Workstream(**w) for w in from_yaml("PERSONAL_AGENT_WORKSTREAMS", "workstreams.yaml").get("workstreams", [])],
         model_catalogue=[ModelChoice(**m) for m in catalogue],
+        dispatch_hold_minutes=int(env("PERSONAL_AGENT_DISPATCH_HOLD_MINUTES") or 15),
         brand_name=env("PERSONAL_AGENT_NAME") or "Chidimma OS",
         owner_name=env("PERSONAL_AGENT_OWNER_NAME") or "Chidimma",
         graph_tenant_id=env("MS_GRAPH_TENANT_ID") or None,

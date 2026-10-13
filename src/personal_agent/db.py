@@ -211,6 +211,32 @@ signals = Table(
     Column("created_at", String),
 )
 
+# A brief approved for an agency. It is held until release_at, then sent; the
+# owner can recall it while it is held.
+dispatches = Table(
+    "dispatches",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("run_id", String, index=True),
+    Column("workstream", String, index=True),
+    Column("kind", String),  # brief | halt
+    Column("agency", String),
+    Column("recipient", String),
+    Column("subject", String),
+    Column("body", String),
+    Column("attachments", JSON),  # paths in the workstream's folder
+    Column("directive", String),
+    Column("revision_of", String),  # the dispatch this one replaces
+    Column("halts", String),  # for a halt notice: the dispatch it asks the agency to stop
+    Column("status", String, index=True),  # held | sending | sent | outbox | recalled | halt_pending | halted | failed | uncertain
+    Column("note", String),
+    Column("approved_hash", String),
+    Column("release_at", String),
+    Column("sent_at", String),
+    Column("recalled_at", String),
+    Column("created_at", String),
+)
+
 # The owner's choice of model for a tier, made on the Settings screen. A row
 # replaces that tier's line in config/route_table.yaml; no row leaves the file's.
 model_routes = Table(
@@ -484,6 +510,29 @@ class Database:
     def delete_signal(self, signal_id: str) -> None:
         self._remove(signals, signal_id)
 
+    # --- agency dispatches ----------------------------------------------------
+    def create_dispatch(self, **fields) -> str:
+        return self._insert(dispatches, **fields)
+
+    def get_dispatch(self, dispatch_id: str) -> dict | None:
+        return next(iter(self._rows(dispatches, id=dispatch_id)), None)
+
+    def list_dispatches(self, status: str | None = None) -> list[dict]:
+        return self._rows(dispatches, **({"status": status} if status else {}))
+
+    def update_dispatch(self, dispatch_id: str, **fields) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(dispatches).where(dispatches.c.id == dispatch_id).values(**fields))
+
+    def claim_dispatch(self, dispatch_id: str, was: str, becomes: str) -> bool:
+        """Move a dispatch from one status to another, if it is still in the first.
+        Two callers cannot both win, so a brief is sent once and a recall beats a send or loses to it."""
+        with self.engine.begin() as cx:
+            changed = cx.execute(
+                update(dispatches).where(dispatches.c.id == dispatch_id, dispatches.c.status == was).values(status=becomes)
+            )
+        return changed.rowcount == 1
+
     def recent_audit(self, limit: int = 40) -> list[dict]:
         with self.engine.connect() as cx:
             return [dict(r) for r in cx.execute(
@@ -493,7 +542,7 @@ class Database:
     def forget_client_settings(self, client: str) -> None:
         with self.engine.begin() as cx:
             # A deleted client's tasks, decisions, knowledge and signals go with it.
-            for table in (tasks, decisions, memory_items, signals):
+            for table in (tasks, decisions, memory_items, signals, dispatches):
                 cx.execute(delete(table).where(table.c.workstream == client))
             cx.execute(delete(client_settings).where(client_settings.c.name == client))
             cx.execute(delete(restricted_clients).where(restricted_clients.c.name == client))

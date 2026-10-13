@@ -23,11 +23,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from personal_agent.api import ui, workspace
+from personal_agent.api import dispatches, ui, workspace
 from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
 from personal_agent import auth, connectors, costs, jobs, learning, retention, tracing
+from personal_agent.engine import dispatch as agency_dispatch
 from personal_agent.engine import think
 from personal_agent.engine.runner import Engine, UnknownWorkflow
 from personal_agent.skills.loader import load_library
@@ -323,6 +324,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return ZoneInfo(settings.calendar.timezone)
 
     def render(title: str, active: str, body: str, script: str = "", refresh: int = 0, dock: str = "") -> str:
+        agency_dispatch.release_due(engine)
         waiting = len(db.list_runs(status="waiting_for_approval")) + len(db.list_runs(status="waiting_for_input"))
         today = datetime.now(_zone())
         return ui.page(
@@ -558,6 +560,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             {"approved": "approved", "sent_back": "changes", "rejected": "declined"}[body.decision],
             body.comment, "run", run_id,
         )
+        # An approved agency brief has its own log, with the recall on it.
+        sent_to = (run["outputs"] or {}).get("dispatch_id") if run["workflow"] == agency_dispatch.WORKFLOW else None
+        if sent_to and body.decision == "approved":
+            return _back_to(request, f"/dispatch/{sent_to}") or result
         return _back_to(request, f"/queue?done={decision_id}") or result
 
     @app.get("/inputs/pending")
@@ -732,6 +738,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return render("Agent work", "work", f"""
 <p class="crumb"><a href="/work">Work</a> / Agent work</p>
 <h1>Agent work</h1>
+<p class="banner" role="status">To send an approved brief to an agency, use <a href="/dispatch">Agency dispatch</a>.</p>
 <p class="lede">Give the agent a piece of work. It prepares a draft and puts it in Review for your decision.
  Sponsorship enquiries arrive by mail and need nothing from you here.</p>
 {f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
@@ -1349,6 +1356,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         "brief-evaluation": ("Brief", "c-blue"), "strategy-drafting": ("Strategy", "c-purple"),
         "creative-review": ("Creative", "c-rose"), "sponsorship-triage": ("Sponsorship", "c-amber"),
         "call-change": ("Calls", "c-emerald"), "think": ("Think", "c-purple"),
+        "agency-dispatch": ("Dispatch", "c-emerald"),
     }
     STATUS_WORDS = {
         "waiting_for_approval": "waiting for you", "waiting_for_input": "has questions for you",
@@ -1749,6 +1757,9 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 "cancel": ("Approve and cancel this call", "Approve it and the agent cancels this call."),
                 "outline": ("Approve outline and start the draft", "Approve the outline and the agent starts the draft."),
                 "save": ("Approve and save this document", "Approve it and the agent saves this document."),
+                "dispatch": ("Approve and dispatch to the agency",
+                             "Approve it and the agent sends this mail to the agency once the hold ends. Until then you can recall it."),
+                "halt": ("Approve and send this halt notice", "Approve it and the agent sends this notice to the agency at once."),
             }.get(item.get("action"), ("Approve and release this content", "Approve it and the agent releases this content."))
             if item.get("action") == "send" and not mailbox:
                 effect += " No mailbox is connected yet, so the reply waits in the outbox."
@@ -1860,6 +1871,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         app, settings=settings, db=db, engine=engine, render=render, tags=TAGS, status_words=STATUS_WORDS,
         sheet_script=SHEET_SCRIPT, cap_banner=_cap_banner, calls_today=_calls_today, fields=_fields, dock=_dock,
     )
+    dispatches.install(app, settings=settings, db=db, engine=engine, render=render, ws_api=ws_api, dock=_dock)
     return app
 
 
