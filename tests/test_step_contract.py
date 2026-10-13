@@ -66,3 +66,22 @@ def test_budget_ceiling_stops_run_and_keeps_reason(settings):
     run = engine.db.get_run(run_id)
     assert run["status"] == "failed"
     assert "ceiling reached" in run["error_reason"]
+
+
+def test_a_step_with_pictures_goes_to_the_vision_route_and_a_text_step_does_not():
+    from personal_agent.config import TierRoute
+    from personal_agent.harness.models import ModelGateway
+
+    class Routed(ModelGateway):
+        def _call(self, model, contract, context, fallback_used, images=None):
+            return {"data": {}, "model": model, "usage": {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}}
+
+    table = {"standard": TierRoute(primary="groq/text-model"), "vision": TierRoute(primary="groq/seeing-model")}
+    contract = next(iter(__import__("personal_agent.engine.think", fromlist=["x"]).think_contracts().values()))
+    gateway = Routed(table)
+    assert gateway.complete(contract, "context")["model"] == "groq/text-model"
+    assert gateway.complete(contract, "context", images=[("Page 1", b"jpeg")])["model"] == "groq/seeing-model"
+    del table["vision"]  # with no vision route, the tier's own model is asked
+    assert gateway.complete(contract, "context", images=[("Page 1", b"jpeg")])["model"] == "groq/text-model"
+    with __import__("pytest").raises(Exception, match="not approved for confidential work"):
+        gateway.complete(contract, "context", providers={"anthropic"})  # a restricted client still stops here

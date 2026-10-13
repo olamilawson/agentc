@@ -46,6 +46,9 @@ class ModelGateway:
         primary is one of them the named fallback is used and shown as such.
         """
         route = self.route_table[contract.tier]
+        if images and "vision" in self.route_table:
+            # A step that shows pictures goes to the model that can see them, whatever its tier.
+            route = self.route_table["vision"]
         models = [(route.primary, False)] + ([(route.fallback, True)] if route.fallback else [])
         if providers is not None:
             models = [(m, fallback) for m, fallback in models if provider_of(m) in providers]

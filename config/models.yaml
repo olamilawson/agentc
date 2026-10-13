@@ -25,4 +25,5 @@ models:
   # run. The text goes to that host, under its terms and its free-use limits.
   - {id: groq/llama-3.3-70b-versatile, label: "Llama 3.3 70B, hosted by Groq", key: GROQ_API_KEY, open: true}
   - {id: groq/openai/gpt-oss-120b, label: "gpt-oss 120B, hosted by Groq", key: GROQ_API_KEY, open: true}
+  - {id: groq/meta-llama/llama-4-scout-17b-16e-instruct, label: "Llama 4 Scout, reads images, hosted by Groq", key: GROQ_API_KEY, open: true}
   - {id: "openrouter/meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B, hosted through OpenRouter", key: OPENROUTER_API_KEY, open: true}

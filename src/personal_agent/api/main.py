@@ -1128,7 +1128,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             return "".join(out)
 
         uses = {"cheap": "Routine steps: sorting, extracting, short checks", "standard": "Most drafting and scoring",
-                "strong": "The hardest steps: long documents, final checks"}
+                "strong": "The hardest steps: long documents, final checks",
+                "vision": "Any step that shows the model a picture: creative review, logo critique"}
         forms = "".join(
             f"""<form method="post" action="/models/route" class="route">
   <input type="hidden" name="tier" value="{escape(tier)}"/>
