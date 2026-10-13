@@ -4,6 +4,8 @@
 #
 #   cd /opt/personal-agent && ./deploy/restore.sh            choose from the backups on this server
 #   ./deploy/restore.sh /var/backups/personal-agent/backup-2026-10-12-0215.tar.gz
+#   ./deploy/restore.sh --offsite        choose from the encrypted copies in the bucket; it asks
+#                                        for your backup key, which is not kept on this server
 #
 # It asks before it changes anything. First it takes a fresh backup of the state
 # you are leaving, so a restore can itself be undone. The site is off for the
@@ -17,6 +19,57 @@ cd "$COMPOSE_DIR"
 setting() { { grep -E "^$1=" .env 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-; }
 DIR=$(setting BACKUP_DIR); DIR=${DIR:-/var/backups/personal-agent}
 say() { printf '\n== %s\n' "$1"; }
+
+# 0. From the bucket: fetch an encrypted copy and open it with the owner's secret key
+if [ "${1:-}" = "--offsite" ]; then
+  BUCKET=$(setting BACKUP_S3_BUCKET)
+  if [ -z "$BUCKET" ]; then
+    echo "No bucket is set up on this server (./deploy/setup.sh --offsite). Nothing changed."
+    exit 1
+  fi
+  export RCLONE_CONFIG_OFFSITE_TYPE=s3 RCLONE_CONFIG_OFFSITE_PROVIDER=Other
+  export RCLONE_CONFIG_OFFSITE_ENDPOINT="$(setting BACKUP_S3_ENDPOINT)"
+  export RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID="$(setting BACKUP_S3_KEY_ID)"
+  export RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY="$(setting BACKUP_S3_SECRET)"
+  region=$(setting BACKUP_S3_REGION)
+  if [ -n "$region" ]; then export RCLONE_CONFIG_OFFSITE_REGION="$region"; fi
+  REMOTE="offsite:$BUCKET/personal-agent"
+  mapfile -t stored < <(rclone lsf "$REMOTE" 2>/dev/null | grep '\.tar\.gz\.age$' | sort -r || true)
+  if [ "${#stored[@]}" -eq 0 ]; then
+    echo "The bucket holds no backup, or could not be reached. Nothing changed."
+    exit 1
+  fi
+  echo "Backups in the bucket, newest first:"
+  for i in "${!stored[@]}"; do printf '  %2d  %s\n' "$((i + 1))" "${stored[$i]}"; done
+  printf 'Type the number to fetch, or press Enter to leave everything as it is: '
+  read -r pick
+  if ! [[ "$pick" =~ ^[0-9]+$ ]] || [ "$pick" -lt 1 ] || [ "$pick" -gt "${#stored[@]}" ]; then
+    echo "Nothing changed."
+    exit 0
+  fi
+  NAME="${stored[$((pick - 1))]}"
+  umask 077
+  mkdir -p "$DIR"
+  FETCH=$(mktemp -d)
+  if ! rclone copyto "$REMOTE/$NAME" "$FETCH/$NAME"; then
+    rm -rf "$FETCH"
+    echo "The bucket did not give up $NAME. Nothing changed."
+    exit 1
+  fi
+  printf 'Paste your backup key, the line that starts AGE-SECRET-KEY (it does not show): '
+  read -rs key; echo
+  printf '%s\n' "$key" > "$FETCH/key"
+  unset key
+  OPENED="$DIR/${NAME%.age}"
+  if ! age -d -i "$FETCH/key" -o "$OPENED" "$FETCH/$NAME"; then
+    rm -rf "$FETCH" "$OPENED"
+    echo "That key did not open $NAME. Nothing changed."
+    exit 1
+  fi
+  rm -rf "$FETCH"
+  echo "Fetched and opened $NAME."
+  set -- "$OPENED"
+fi
 
 # 1. Which backup
 FILE="${1:-}"

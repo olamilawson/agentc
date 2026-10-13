@@ -3,11 +3,14 @@
 #
 # With no setup it keeps the archives on this server, readable by root alone,
 # for 14 days. That covers a bad deploy or a mistaken deletion. It does not
-# cover losing the server: for that, add two lines to .env and each archive is
-# also encrypted with your key and copied off the server:
+# cover losing the server. For that, run once:
 #
-#   BACKUP_DEST=user@host:/path      an rsync target somewhere else
-#   AGE_PUBKEY=age1...               your age public key; you alone can open the copy
+#   ./deploy/setup.sh --offsite
+#
+# It makes a key pair, shows you the secret key once to keep somewhere safe,
+# and asks for a storage bucket. From then on each archive is also encrypted
+# to your key, copied to the bucket, read back, and kept there for 30 days.
+# (An rsync target also works: set BACKUP_DEST and AGE_PUBKEY in .env.)
 #
 # deploy/setup.sh schedules this through deploy/jobs.sh. To run it by hand:
 #   /opt/personal-agent/deploy/jobs.sh backup
@@ -55,11 +58,51 @@ find "$DIR" -name 'backup-*.tar.gz' -mtime +"$KEEP" -delete
 count=$(find "$DIR" -name 'backup-*.tar.gz' | wc -l)
 size=$(du -h "$FILE" | cut -f1)
 
-# 5. A copy off this server, when a destination and a key are set
-if [ -n "$DEST" ] && [ -n "$AGE_PUBKEY" ]; then
-  age -r "$AGE_PUBKEY" -o "$WORK/backup-$STAMP.tar.gz.age" "$FILE"
-  rsync -a "$WORK/backup-$STAMP.tar.gz.age" "$DEST/"
-  echo "backup $STAMP: $size, $count kept on this server, encrypted copy sent off the server"
-else
+# 5. A copy off this server, when a key and a destination are set. The archive is
+#    encrypted to your public key first: the store it goes to cannot read it, and
+#    neither can this server once it has gone. Only your secret key opens it.
+S3_BUCKET=$(setting BACKUP_S3_BUCKET)
+if [ -z "$AGE_PUBKEY" ] || { [ -z "$DEST" ] && [ -z "$S3_BUCKET" ]; }; then
   echo "backup $STAMP: $size, $count kept on this server; no copy off the server yet"
+  exit 0
+fi
+
+kept="backup $STAMP: $size, $count kept on this server"
+ENC="$WORK/backup-$STAMP.tar.gz.age"
+if ! age -r "$AGE_PUBKEY" -o "$ENC" "$FILE"; then
+  echo "$kept; the copy off the server FAILED: the archive could not be encrypted"
+  exit 1
+fi
+
+if [ -n "$S3_BUCKET" ]; then
+  # An S3-compatible bucket, reached with rclone. Its settings go to rclone in the
+  # environment of this one script and are written to no file.
+  export RCLONE_CONFIG_OFFSITE_TYPE=s3 RCLONE_CONFIG_OFFSITE_PROVIDER=Other
+  export RCLONE_CONFIG_OFFSITE_ENDPOINT="$(setting BACKUP_S3_ENDPOINT)"
+  export RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID="$(setting BACKUP_S3_KEY_ID)"
+  export RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY="$(setting BACKUP_S3_SECRET)"
+  region=$(setting BACKUP_S3_REGION)
+  if [ -n "$region" ]; then export RCLONE_CONFIG_OFFSITE_REGION="$region"; fi
+  REMOTE="offsite:$S3_BUCKET/personal-agent"
+  NAME=$(basename "$ENC")
+  if ! rclone copyto "$ENC" "$REMOTE/$NAME"; then
+    echo "$kept; the copy off the server FAILED: the store did not take the file"
+    exit 1
+  fi
+  # Read it back: the store must list the file at the size that was sent.
+  sent=$(wc -c < "$ENC" | tr -d '[:space:]')
+  there=$(rclone lsf --format s "$REMOTE/$NAME" 2>/dev/null | tr -d '[:space:]' || true)
+  if [ "$sent" != "$there" ]; then
+    echo "$kept; the copy off the server FAILED: the store holds ${there:-no} bytes of the $sent sent"
+    exit 1
+  fi
+  OFFSITE_KEEP=$(setting BACKUP_OFFSITE_KEEP_DAYS); OFFSITE_KEEP=${OFFSITE_KEEP:-30}
+  rclone delete --min-age "${OFFSITE_KEEP}d" "$REMOTE" || true
+  echo "$kept; encrypted copy sent off the server and read back ($sent bytes)"
+else
+  if ! rsync -a "$ENC" "$DEST/"; then
+    echo "$kept; the copy off the server FAILED: rsync could not reach $DEST"
+    exit 1
+  fi
+  echo "$kept; encrypted copy sent off the server"
 fi

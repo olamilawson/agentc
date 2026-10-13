@@ -148,8 +148,12 @@ backup at 02:15, the retention job at 02:45, the learning review on Mondays at
 the result for the Settings and cost screen.
 
 Backups stay in `/var/backups/personal-agent` for 14 days. For a copy off the
-server, set `BACKUP_DEST` and `AGE_PUBKEY` in `.env`; read the top of
-`deploy/backup.sh`.
+server, run `./deploy/setup.sh --offsite` once. It makes a key pair, shows you
+the secret key once to keep in a password manager, and asks for an
+S3-compatible bucket. From then on each backup is also encrypted to your key,
+copied to the bucket, read back, and kept there for 30 days. The server holds
+only the public half of the key, so it can lock a backup and cannot open one.
+`./deploy/restore.sh --offsite` fetches a copy and asks for your key.
 
 To go back to a backup, run `./deploy/restore.sh`. It lists the backups, asks
 before it changes anything, backs up the present state first, and sets the

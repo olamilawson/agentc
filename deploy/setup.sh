@@ -13,6 +13,8 @@
 #                                      app registration (deploy/microsoft-graph.md), restarts and tests it
 #   ./deploy/setup.sh --watcher        turns on the hook for new mail and loads the watcher into this
 #                                      server's n8n; you then choose the Outlook login in n8n and switch it on
+#   ./deploy/setup.sh --offsite        sets up the encrypted copy of each backup off this server:
+#                                      makes your key, asks for a storage bucket, and proves a backup reaches it
 #   ./deploy/restore.sh                returns the agent to one of its backups (a separate command)
 #   ./deploy/setup.sh --local-model qwen2.5:3b
 #                                      runs an open-weight model on this server for routine steps
@@ -86,6 +88,69 @@ if [ -n "$MAILBOX" ]; then
   ask MS_GRAPH_MAILBOX "The mailbox address the agent sends from"
   ask MS_GRAPH_CALENDAR "The address whose calendar holds your meetings (press Enter to use the mailbox)" "" optional
   echo "Saved. The app restarts next, then the connection is tested."
+fi
+
+# 1b3. The copy of each backup off this server
+OFFSITE=""
+for arg in "$@"; do [ "$arg" = "--offsite" ] && OFFSITE="yes"; done
+if [ -n "$OFFSITE" ]; then
+  say "Setting up the encrypted backup copy off this server"
+  for tool in age rclone; do
+    if ! command -v "$tool" >/dev/null; then
+      if command -v apt-get >/dev/null; then
+        echo "Installing $tool (a small command-line tool; it changes no other site on this server)."
+        apt-get install -y "$tool" >/dev/null
+      else
+        echo "This server has no $tool and no apt-get to install it with. Install $tool, then run this again."
+        exit 1
+      fi
+    fi
+  done
+
+  if grep -q '^AGE_PUBKEY=age1' .env; then
+    echo "This server already has a backup key, so the same one is kept. Your secret key from before still opens the backups."
+  else
+    made=$(age-keygen 2>/dev/null)
+    set_env AGE_PUBKEY "$(printf '%s\n' "$made" | sed -n 's/^# public key: //p')"
+    echo
+    echo "======================================================================"
+    echo " YOUR BACKUP KEY. It is shown once and is not kept on this server."
+    echo
+    printf ' %s\n' "$(printf '%s\n' "$made" | grep '^AGE-SECRET-KEY')"
+    echo
+    echo " Copy that whole line into your password manager now."
+    echo " Without it, no backup stored off this server can ever be opened."
+    echo " Put it nowhere else: not in a chat, not in an email, not in a note."
+    echo "======================================================================"
+    unset made
+    until [ "${answer:-}" = "saved" ]; do
+      printf 'Type saved once it is in your password manager: '
+      read -r answer
+    done
+    clear 2>/dev/null || true
+    echo "The key is off the screen. This server kept only the public half, which can lock a backup and cannot open one."
+  fi
+
+  echo
+  echo "Now the storage bucket. Any S3-compatible store works (Backblaze B2, Cloudflare R2, Amazon S3, Wasabi)."
+  echo "Create a private bucket there and an access key limited to it, then answer:"
+  ask() {  # ask NAME "question" [hidden] [optional]
+    while true; do
+      printf '%s: ' "$2"
+      if [ "${3:-}" = "hidden" ]; then read -rs value; echo; else read -r value; fi
+      value=$(printf '%s' "$value" | tr -d '[:space:]')
+      if [ -n "$value" ] || [ "${4:-}" = "optional" ]; then break; fi
+      echo "That was empty. Try again, or press Ctrl+C to stop."
+    done
+    set_env "$1" "$value"
+    unset value
+  }
+  ask BACKUP_S3_ENDPOINT "The store's S3 endpoint (for example https://s3.eu-central-003.backblazeb2.com)"
+  ask BACKUP_S3_BUCKET "The bucket's name"
+  ask BACKUP_S3_KEY_ID "The access key ID"
+  ask BACKUP_S3_SECRET "The secret access key (it does not show as you paste)" hidden
+  ask BACKUP_S3_REGION "The region, if the store asks for one (press Enter to skip)" "" optional
+  echo "Saved. The backup at the end of this run goes to the bucket and is read back; watch for its line."
 fi
 
 # 1c. An open-weight model on this server

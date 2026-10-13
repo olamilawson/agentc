@@ -1334,8 +1334,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 </table>
 <h2 id="jobs">Scheduled jobs</h2>
 <div class="tablewrap"><table><tr><th>Job</th><th>Server time (UTC)</th><th>Last run</th></tr>{scheduled}</table></div>
-<p class="meta">The server runs these by itself. Backups stay on the server for 14 days; a copy off the server needs a
- destination and a key (<code>deploy/backup.sh</code>). <code>./deploy/restore.sh</code> on the server returns the agent to a backup.</p>
+<p class="meta">The server runs these by itself. Backups stay on the server for 14 days. For an encrypted copy off the server, run
+ <code>./deploy/setup.sh --offsite</code>; the backup's line above then says the copy was sent and read back. <code>./deploy/restore.sh</code> on the server returns the agent to a backup.</p>
 <h2 id="connectors">Connectors</h2>
 <p class="lede">Outside creative services. You use them on the <a href="/studio">Studio</a> screen; what they make is saved
  to the workstream's folder or stays in your own Canva account.</p>

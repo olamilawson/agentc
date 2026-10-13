@@ -43,9 +43,9 @@ sit behind login and an address allowlist (host firewall or reverse proxy rule)
 
 `backup.sh` (scheduled by `setup.sh`, run as root) dumps Postgres and copies the
 client folders into one archive kept on the server for 14 days. With
-`BACKUP_DEST` and `AGE_PUBKEY` set in `.env` it also encrypts the archive with
-the owner's age public key and ships it off the server; until then the "off
-the server" part of this item is not met.
+`./deploy/setup.sh --offsite` run once, it also encrypts each archive to the
+owner's age public key, copies it to an S3-compatible bucket and reads it
+back; until then the "off the server" part of this item is not met.
 It does not copy the Caddy data: that holds only TLS certificates and their
 keys, which Caddy obtains again on a restored server. A restore is rehearsed
 monthly into a scratch directory and the result is checked before it counts.
