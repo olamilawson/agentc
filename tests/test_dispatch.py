@@ -186,3 +186,60 @@ def test_the_mailbox_attaches_each_file_to_the_draft_before_it_sends():
     assert steps == ["messages", "attachments", "send"]  # the file is on the draft before the one call that cannot be taken back
     attached = next(body for _, path, body in seen if path.endswith("/attachments"))
     assert attached["name"] == "tone.txt" and base64.b64decode(attached["contentBytes"]) == b"Warm."
+
+
+# --- the mailbox connection check -------------------------------------------------------
+def _graph(refuse: str | None = None, seen: list | None = None):
+    def graph(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if seen is not None:
+            seen.append((request.method, path))
+        if request.url.host != "graph.microsoft.com":
+            return httpx.Response(401, json={"error_description": "invalid client secret"}) if refuse == "sign-in" \
+                else httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        if refuse == "mailbox" and "/messages" in path:
+            return httpx.Response(403, json={"error": {"message": "Access to OData is disabled."}})
+        if path.endswith("/getSchedule"):
+            return httpx.Response(200, json={"value": [{"scheduleItems": []}]})
+        if request.method == "POST" and path.endswith("/messages"):
+            return httpx.Response(201, json={"id": "draft-9"})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        if path.endswith("/send"):
+            return httpx.Response(202)
+        return httpx.Response(200, json={"value": []})
+
+    return GraphMail("tenant", "client", "secret", "owner@company.example", transport=httpx.MockTransport(graph))
+
+
+def test_the_connection_check_tries_each_need_and_sends_nothing():
+    seen: list = []
+    steps = _graph(seen=seen).check()
+    assert [s["ok"] for s in steps] == [True, True, True, True]
+    assert not any(path.endswith("/send") for _, path in seen)
+    assert any(method == "DELETE" and path.endswith("/messages/draft-9") for method, path in seen)  # its draft is removed
+
+
+def test_the_check_stops_at_the_first_refusal_and_says_what_to_look_at():
+    refused = _graph("sign-in").check()
+    assert len(refused) == 1 and not refused[0]["ok"] and "secret past its expiry date" in refused[0]["detail"]
+    blocked = _graph("mailbox").check()
+    assert [s["ok"] for s in blocked] == [True, False] and "access policy" in blocked[1]["detail"]
+
+
+def test_settings_shows_the_mailbox_state_and_runs_the_test_and_the_test_mail(settings):
+    _, client = _app(settings)
+    page = client.get("/cost").text
+    assert "Not connected: the server has no MS_GRAPH_TENANT_ID" in page and "./deploy/setup.sh --mailbox" in page
+    assert client.post("/mailbox/test").status_code == 409
+
+    seen: list = []
+    _, client = _app(settings, _graph(seen=seen))
+    assert "Connected to <strong>owner@company.example</strong>" in client.get("/cost").text
+    back = client.post("/mailbox/test", headers={"accept": "text/html"})
+    assert back.headers["location"] == "/cost#mailbox"
+    page = client.get("/cost").text
+    assert page.count('<span class="s-done">worked</span>') >= 4 and "a draft was made and removed" in page
+    assert "a draft was made and removed" not in client.get("/cost").text  # the result is shown once
+    client.post("/mailbox/test-send")
+    assert any(path.endswith("/send") for _, path in seen) and "Microsoft accepted it." in client.get("/cost").text

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import base64
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import httpx
@@ -161,6 +161,50 @@ class GraphMail:
             )
         self._discard(draft_id)
         raise GraphError(f"Microsoft Graph refused to send the reply ({_reason(sent)})")
+
+    # --- checking the connection ----------------------------------------------------------
+    def check(self) -> list[dict]:
+        """Try what the agent needs, in order, and stop at the first refusal. Sends no
+        mail. Each step is {"step", "ok", "detail"}; a failed step says what to look at."""
+        steps: list[dict] = []
+
+        def attempt(step: str, action, hint: str) -> bool:
+            try:
+                detail = action()
+            except GraphError as e:
+                steps.append({"step": step, "ok": False, "detail": f"{e}. {hint}"})
+                return False
+            steps.append({"step": step, "ok": True, "detail": detail})
+            return True
+
+        base = self._mailbox_path()
+
+        def draft_and_discard() -> str:
+            made = self._call("POST", f"{base}/messages", ok=(201,), json={
+                "subject": "Connection check (draft, never sent)", "body": {"contentType": "Text", "content": ""},
+            }).json()["id"]
+            self._discard(made)
+            return "a draft was made and removed"
+
+        def read_calendar() -> str:
+            now = datetime.now(timezone.utc)
+            self.busy_periods(now, now + timedelta(hours=1))
+            return f"free and busy times for {self.calendar} can be read"
+
+        (
+            attempt("Sign in as the application", lambda: self._bearer() and "Microsoft accepted the application",
+                    "Check the tenant ID, the client ID and the secret's Value; a secret past its expiry date is refused")
+            and attempt(f"Read the mailbox {self.mailbox}",
+                        lambda: self._call("GET", f"{base}/messages?$top=1&$select=id", ok=(200,)) and "its mail can be read",
+                        "Check the mailbox address, that Mail.ReadWrite has admin consent, "
+                        "and that the access policy's group holds this mailbox")
+            and attempt("Write a draft in the mailbox", draft_and_discard,
+                        "Mail.ReadWrite (Application) needs admin consent")
+            and attempt("Read the calendar", read_calendar,
+                        "Calendars.ReadWrite (Application) needs admin consent, and the access policy's group must hold "
+                        "the calendar's mailbox")
+        )
+        return steps
 
     def _discard(self, draft_id: str | None) -> None:
         """Remove a draft that will not be sent. Best effort: a leftover draft is harmless."""
@@ -306,3 +350,30 @@ def from_settings(settings) -> GraphMail | None:
     """The connection, if all four values are set; otherwise None and mail stays local."""
     values = (settings.graph_tenant_id, settings.graph_client_id, settings.graph_client_secret, settings.graph_mailbox)
     return GraphMail(*values, calendar=settings.graph_calendar) if all(values) else None
+
+
+SETTINGS = ("MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_CLIENT_SECRET", "MS_GRAPH_MAILBOX")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m personal_agent.graph_mail`: check the mailbox connection and print each step. Sends no mail."""
+    import sys
+
+    from personal_agent.config import load_settings
+
+    mail = from_settings(load_settings())
+    if mail is None:
+        print("The mailbox is not connected: one of the four settings is empty (" + ", ".join(SETTINGS) + ").")
+        return 1
+    steps = mail.check()
+    for step in steps:
+        print(f"{'ok    ' if step['ok'] else 'FAILED'}  {step['step']}: {step['detail']}")
+    good = all(step["ok"] for step in steps)
+    print("The mailbox is connected. Send yourself a test mail from Settings and cost to prove the send."
+          if good else "The mailbox is not ready. Fix the step marked FAILED and run this again.")
+    sys.stdout.flush()
+    return 0 if good else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

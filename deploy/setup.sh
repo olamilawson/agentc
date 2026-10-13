@@ -9,6 +9,8 @@
 #   ./deploy/setup.sh --with-code      also asks for a code from an authenticator app at sign-in
 #   ./deploy/setup.sh --key openai     asks for a service's key (openai, anthropic, groq, openrouter, canva, higgsfield),
 #                                      saves it and restarts the app. The key does not show as you paste it.
+#   ./deploy/setup.sh --mailbox        connects the Microsoft mailbox: asks for the four values from the
+#                                      app registration (deploy/microsoft-graph.md), restarts and tests it
 #   ./deploy/restore.sh                returns the agent to one of its backups (a separate command)
 #   ./deploy/setup.sh --local-model qwen2.5:3b
 #                                      runs an open-weight model on this server for routine steps
@@ -59,6 +61,30 @@ for arg in "$@"; do
   [ "$prev" = "--local-model" ] && LOCAL_MODEL="$arg"
   prev="$arg"
 done
+
+# 1b2. The Microsoft mailbox: four values from the app registration, typed or pasted here
+MAILBOX=""
+for arg in "$@"; do [ "$arg" = "--mailbox" ] && MAILBOX="yes"; done
+if [ -n "$MAILBOX" ]; then
+  say "Connecting the Microsoft mailbox. Have the app registration's overview page open."
+  ask() {  # ask NAME "question" [hidden] [optional]
+    while true; do
+      printf '%s: ' "$2"
+      if [ "${3:-}" = "hidden" ]; then read -rs value; echo; else read -r value; fi
+      value=$(printf '%s' "$value" | tr -d '[:space:]')
+      if [ -n "$value" ] || [ "${4:-}" = "optional" ]; then break; fi
+      echo "That was empty. Try again, or press Ctrl+C to stop without changing anything more."
+    done
+    set_env "$1" "$value"
+    unset value
+  }
+  ask MS_GRAPH_TENANT_ID "Directory (tenant) ID"
+  ask MS_GRAPH_CLIENT_ID "Application (client) ID"
+  ask MS_GRAPH_CLIENT_SECRET "Client secret Value (it does not show as you paste)" hidden
+  ask MS_GRAPH_MAILBOX "The mailbox address the agent sends from"
+  ask MS_GRAPH_CALENDAR "The address whose calendar holds your meetings (press Enter to use the mailbox)" "" optional
+  echo "Saved. The app restarts next, then the connection is tested."
+fi
 
 # 1c. An open-weight model on this server
 if [ -n "$LOCAL_MODEL" ]; then
@@ -114,6 +140,12 @@ fi
 # 4. Start the database and the app (deploy.sh tests the build first)
 say "Starting the app"
 ./deploy/deploy.sh
+
+# 4b. Test the mailbox, once the app that holds the new settings is running
+if [ -n "$MAILBOX" ]; then
+  say "Testing the mailbox connection (this sends no mail)"
+  docker compose exec -T api python -m personal_agent.graph_mail || true
+fi
 
 # 5. Connect the domain through this server's nginx. Only this one site is added.
 say "Connecting $DOMAIN"

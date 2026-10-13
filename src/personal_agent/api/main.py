@@ -237,6 +237,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 
     app = FastAPI(title="Personal Agent", version="0.1.0 (foundation)")
     app.state.engine = engine
+    app.state.mailbox_check = []
     # The owner's workstreams, created once. One the owner later deletes stays deleted.
     ui.STREAM_COLOURS.update({w.name: w.colour for w in settings.workstreams if w.colour})
     if settings.workstreams and not db.audited_since("workstreams_seeded", ""):
@@ -1104,8 +1105,38 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             return report(f"{model} answered: {result['detail']}.{press}", False)
         return report(f"{model} did not answer. {_why_no_answer(model, result['detail'])}{saved}", True)
 
+    # --- mailbox ------------------------------------------------------------------------
+    @app.post("/mailbox/test")
+    def test_mailbox(request: Request):
+        """Check the Microsoft connection step by step. It sends no mail."""
+        mail = engine.harness.mail
+        if mail is None:
+            raise HTTPException(409, "the mailbox is not connected")
+        steps = mail.check()
+        db.audit(None, "mailbox_tested", {"ok": all(s["ok"] for s in steps)})
+        app.state.mailbox_check = steps
+        return _back_to(request, "/cost#mailbox") or {"steps": steps}
+
+    @app.post("/mailbox/test-send")
+    def test_send(request: Request):
+        """One fixed mail from the mailbox to itself, at the owner's press of the button: the proof that sending works."""
+        mail = engine.harness.mail
+        if mail is None:
+            raise HTTPException(409, "the mailbox is not connected")
+        try:
+            mail.send_reply(mail.mailbox, f"{settings.brand_name}: test mail",
+                            "This is a test from your agent. It shows that the mailbox can send. No reply is needed.")
+            step = {"step": "Send a test mail", "ok": True, "detail": f"Microsoft accepted it. Look for it in {mail.mailbox}"}
+        except Exception as e:  # refused, or the outcome is unknown: both are reported, neither is retried
+            step = {"step": "Send a test mail", "ok": False, "detail": f"{e}. Mail.Send (Application) needs admin consent"}
+        db.audit(None, "mailbox_test_sent", {"ok": step["ok"]})
+        app.state.mailbox_check = [step]
+        return _back_to(request, "/cost#mailbox") or {"steps": [step]}
+
     @app.get("/cost", response_class=HTMLResponse)
     def cost_page(month: str | None = None, notice: str = "", tested: str = "", tier: str = "", bad: str = "") -> str:
+        mailbox_check = app.state.mailbox_check
+        app.state.mailbox_check = []  # shown once, on the page the test returns to
         try:
             s = costs.summary(db, settings, month)
         except ValueError as e:
@@ -1155,6 +1186,28 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             for j in jobs.last_runs(settings.clients_dir.parent / "jobs")
         )
         mail = engine.harness.mail
+        lacking = [name for name, value in (
+            ("MS_GRAPH_TENANT_ID", settings.graph_tenant_id), ("MS_GRAPH_CLIENT_ID", settings.graph_client_id),
+            ("MS_GRAPH_CLIENT_SECRET", settings.graph_client_secret), ("MS_GRAPH_MAILBOX", settings.graph_mailbox),
+        ) if not value]
+        checked = "".join(
+            f"<tr><td>{'<span class=\"s-done\">worked</span>' if step['ok'] else '<span class=\"s-failed\">failed</span>'}</td>"
+            f"<td>{escape(step['step'])}</td><td>{escape(step['detail'])}</td></tr>"
+            for step in mailbox_check
+        )
+        mailbox_section = (
+            f"""<p>Connected to <strong>{escape(mail.mailbox)}</strong>. Free time is read from {escape(mail.calendar)}.</p>
+<div class="actions"><form method="post" action="/mailbox/test"><button>Test the connection</button></form>
+  <form method="post" action="/mailbox/test-send"><button>Send a test mail to {escape(mail.mailbox)}</button></form></div>
+<p class="meta">The test reads the mailbox and the calendar, makes one draft and removes it. It sends nothing.
+ The test mail goes from the mailbox to itself.</p>"""
+            if mail else
+            f"""<p class="banner" role="status">Not connected: the server has no {escape(" or ".join(lacking)) or "mailbox settings"}.
+ Approved mail waits in the outbox on this server.</p>
+<p class="meta">Register the application in Microsoft Entra (<code>deploy/microsoft-graph.md</code>, steps 1 to 4),
+ then run <code>./deploy/setup.sh --mailbox</code> on the server. It asks for the four values and tests the connection.</p>"""
+        ) + (f'<div class="tablewrap"><table><tr><th>Result</th><th>Step</th><th>What happened</th></tr>{checked}</table></div>'
+             if checked else "")
         mail_line = (
             f"Mail goes through Microsoft Graph from {escape(mail.mailbox)}. <code>send_mail</code> sends a reply once you approve it."
             if mail else
@@ -1197,6 +1250,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 <p class="lede">Outside creative services the agent will use. Each is a shell for now: its tools exist and obey the same
  approval rules as mail, and no workflow calls them yet.</p>
 <div class="tablewrap"><table><tr><th>Service</th><th>Tools it will offer</th></tr>{plugins}</table></div>
+<h2 id="mailbox">Mailbox and calendar</h2>
+{mailbox_section}
 <h2>Tools</h2>
 <div class="tablewrap"><table><tr><th>Tool</th><th>Class</th><th>Approval</th></tr>{tools}</table></div>
 <p class="meta">{mail_line}</p>

@@ -61,32 +61,38 @@ The test must report `Denied` for a mailbox outside the group. If your calendar
 lives in a different mailbox from the one the agent sends from, put both in
 the group.
 
-## 5. Add the settings on the server
+## 5. Connect it on the server
 
-In `/opt/personal-agent/.env`:
-
-| Line | Value |
-|---|---|
-| `MS_GRAPH_TENANT_ID` | Directory (tenant) ID |
-| `MS_GRAPH_CLIENT_ID` | Application (client) ID |
-| `MS_GRAPH_CLIENT_SECRET` | the secret's Value |
-| `MS_GRAPH_MAILBOX` | the mailbox address, for example the sponsorship alias |
-| `MS_GRAPH_CALENDAR` | the address whose calendar holds your meetings; leave empty to use the mailbox |
-
-Then restart:
+One command asks for the four values, saves them, restarts the app and tests
+the connection:
 
 ```bash
-cd /opt/personal-agent && docker compose up -d
+cd /opt/personal-agent && git pull && ./deploy/setup.sh --mailbox
 ```
+
+It asks for:
+
+| Question | Where the value is |
+|---|---|
+| Directory (tenant) ID | the app registration's overview page |
+| Application (client) ID | the same page |
+| Client secret Value | copied in step 2; it does not show as you paste |
+| The mailbox address | the one mailbox the agent sends from |
+| The calendar's address | whose calendar holds your meetings; press Enter to use the mailbox |
+
+The test signs in, reads the mailbox, makes a draft and removes it, and reads
+the calendar. It sends nothing. A failed step says what to look at.
 
 ## 6. Confirm
 
-Open Settings and cost. Under Connected tools it reads "Mail goes through
-Microsoft Graph from" followed by the mailbox address.
+Open Settings and cost, section "Mailbox and calendar". It names the mailbox,
+and has two buttons: "Test the connection" repeats the test above, and "Send a
+test mail" sends one fixed mail from the mailbox to itself, which proves
+`Mail.Send`.
 
-The first real proof is one reply. Send a test enquiry to the mailbox from an
-address you own, approve the agent's reply, and read it in your own inbox and
-in the mailbox's Sent Items.
+After that, approved replies and agency briefs go out through the mailbox
+instead of waiting in the outbox. Mail already in the outbox is not sent
+after the fact: send those by hand, or dispatch them again.
 
 ## 7. Point the n8n watcher at the agent
 
