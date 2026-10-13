@@ -37,7 +37,14 @@ SKILLS = {
     "reputation-assessment": "Reputation Assessment",
     "competitor-analysis": "Competitor Analysis",
     "executive-update": "Executive Update",
+    "proposal-review": "Proposal Review",
+    "media-summary": "Media Summary",
+    "research-synthesis": "Research Synthesis",
+    "task-prioritisation": "Task Prioritisation",
+    "follow-up-management": "Follow-up Management",
 }
+# These two work from the workstream's own open tasks, so they can run with nothing pasted.
+TASK_SKILLS = {"task-prioritisation", "follow-up-management"}
 MAX_REVISIONS = 3
 MATERIAL_CHARS = 60_000
 
@@ -114,6 +121,19 @@ def build_skill_graph(skill: str, h):
         pasted = str(inputs.get("material") or "").strip()
         if pasted:
             material.append({"source": "pasted material", "text": pasted[:MATERIAL_CHARS]})
+        if skill in TASK_SKILLS:
+            # The owner's task list, as recorded. It goes in as data like any other material.
+            open_tasks = [t for t in db.list_tasks() if t["workstream"] == state["client"] and t["status"] != "done"]
+            listed = "\n".join(
+                f"- {t['title']} | status: {t['status'].replace('_', ' ')} | risk: {t['risk'] or 'not set'} | "
+                f"due: {t['due'] or 'no due time'} | owner: {t['owner'] or 'not set'}"
+                + (f" | detail: {t['detail']}" if t["detail"] else "")
+                for t in open_tasks
+            )
+            material.append({"source": "open tasks recorded for this workstream",
+                             "text": listed or "No open task is recorded for this workstream."})
+        if not material and not (inputs.get("source_paths") or []):
+            raise StepFailed("there is no material to work from, so the work was not started")
         for path in inputs.get("source_paths") or []:
             read = h.tools.call(state["run_id"], "intake", ["read_client_file"], "read_client_file",
                                 {"client": state["client"], "path": path})

@@ -83,9 +83,11 @@ this repository implements **Delivery phase 1: Foundation**.
   Intelligence is a watchlist the owner fills; no feed is connected. The nine
   workstreams in `config/workstreams.yaml` are created once. Nothing is sample
   data.
-- **Skill runs** — `engine/skill_run.py`. Six skills (campaign review, copy
+- **Skill runs** — `engine/skill_run.py`. Eleven skills (campaign review, copy
   review, executive email, reputation assessment, competitor analysis,
-  executive update) share one graph and each is a workflow of its own name
+  executive update, proposal review, media summary, research synthesis, task
+  prioritisation, follow-up management). The last two also read the workstream's
+  own open tasks. The skills share one graph and each is a workflow of its own name
   with its own rubric in `skills/<name>/SKILL.md`, so the learning review
   proposes changes to each from the owner's edits. A run works from the
   owner's request and supplied material, with no web access; the result is

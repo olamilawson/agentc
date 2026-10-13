@@ -43,7 +43,7 @@ def test_each_skill_ships_a_rubric_and_is_offered_on_the_screens(settings):
     page = client.get("/new?skill=copy-review").text
     assert '<option value="copy-review" selected>Copy Review</option>' in page and "Run this skill" in page
     think = client.get("/think").text
-    assert 'href="/new?skill=reputation-assessment#skill"' in think and think.count("Agent workflow") == 10
+    assert 'href="/new?skill=reputation-assessment#skill"' in think and think.count("Agent workflow") == 15
 
 
 def test_a_skill_works_to_its_rubric_from_the_material_and_waits_for_the_owner(settings):
@@ -95,6 +95,38 @@ def test_a_skill_reads_an_uploaded_file_and_refuses_a_request_with_nothing_to_wo
         back = client.post("/new", data={"workflow": "skill", "skill": "copy-review", "client_existing": "AltBank",
                                          "request": "x", "material": "y", **data})
         assert reason in client.get(back.headers["location"]).text, data
+
+
+def test_the_task_skills_read_the_workstreams_open_tasks_and_no_others(settings):
+    gateway = Listening({"skill_produce": [REVIEW, REVIEW]})
+    client = _client(settings, gateway=gateway)
+    client.post("/clients", json={"name": "MBN"})
+    for ws, title, status in (("AltBank", "Approve campaign direction", "awaiting_approval"),
+                              ("AltBank", "File the old deck", "done"), ("MBN", "Review expansion case", "todo")):
+        client.post("/tasks", data={"title": title, "workstream": ws, "status": status, "risk": "high"})
+    # With nothing pasted, the skill still has the task list to work from.
+    sent = client.post("/new", data={"workflow": "skill", "skill": "task-prioritisation", "client_existing": "AltBank",
+                                     "request": "What should I do first this week?"})
+    assert sent.status_code == 303 and sent.headers["location"].startswith("/inspect/")
+    context = gateway.contexts[0]
+    assert "# Task prioritisation" in context and '<untrusted_data source="open tasks recorded for this workstream">' in context
+    assert "Approve campaign direction | status: awaiting approval | risk: high" in context
+    assert "File the old deck" not in context and "Review expansion case" not in context  # done, and another workstream's
+
+    client.post("/new", data={"workflow": "skill", "skill": "follow-up-management", "client_existing": "MBN",
+                              "request": "Who owes what?", "material": "Tunde will send the financials by Friday."})
+    assert "Review expansion case" in gateway.contexts[1] and "Tunde will send the financials" in gateway.contexts[1]
+    assert "Approve campaign direction" not in gateway.contexts[1]
+
+
+def test_the_other_three_new_skills_still_need_material(settings):
+    client = _client(settings, skill_produce=[REVIEW])
+    for skill in ("proposal-review", "media-summary", "research-synthesis"):
+        back = client.post("/new", data={"workflow": "skill", "skill": skill, "client_existing": "AltBank", "request": "x"})
+        assert "Give the agent material" in client.get(back.headers["location"]).text, skill
+    run_id = _run(client, skill="media-summary", request="Summarise this week.", material="The Guardian, 12 Oct: fees rise.")
+    assert client.get(f"/runs/{run_id}").json()["workflow"] == "media-summary"
+    assert "Media Summary: Savings launch" in client.get("/queue").text
 
 
 # --- the watcher --------------------------------------------------------------------------

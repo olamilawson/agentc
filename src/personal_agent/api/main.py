@@ -838,7 +838,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         f'<option value="{name}"{" selected" if name == skill else ""}>{escape(label)}</option>'
         for name, label in skill_run.SKILLS.items())}</select></label>{client_fields}
     <label>Your request <textarea name="request" rows="3" maxlength="8000" required></textarea></label>
-    <label>Material <span class="or">paste the plan, the copy, the coverage, the figures</span>
+    <label>Material <span class="or">paste the plan, the copy, the coverage, the notes. Task Prioritisation and
+      Follow-up Management also read this workstream's open tasks.</span>
       <textarea name="material" rows="6" maxlength="60000"></textarea></label>
     <label>Or files (PDF, Word or text) <input type="file" name="source_files" multiple/></label>
     <button class="approve">Run this skill</button>
@@ -933,7 +934,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             sources = await stored("source_files")
             if isinstance(sources, str):
                 return back(sources)
-            if not sources and not text("material"):
+            if not sources and not text("material") and text("skill") not in skill_run.TASK_SKILLS:
                 return back("Give the agent material to work from: paste it, or add a file.")
             workflow = text("skill")
             inputs = {"request": text("request"), "material": text("material").replace("\r\n", "\n")[:60_000],
@@ -1675,11 +1676,13 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     SKILL_LIST = (
         ("Campaign Review", "/new?skill=campaign-review#skill"), ("Creative Review", "/new#creative"),
         ("Copy Review", "/new?skill=copy-review#skill"),
-        ("Strategic Recommendation", "/new#draft"), ("Proposal Review", None), ("Approval Memo", "/new#draft"),
+        ("Strategic Recommendation", "/new#draft"), ("Proposal Review", "/new?skill=proposal-review#skill"), ("Approval Memo", "/new#draft"),
         ("Executive Email", "/new?skill=executive-email#skill"), ("Reputation Assessment", "/new?skill=reputation-assessment#skill"),
-        ("Media Summary", None), ("Competitor Analysis", "/new?skill=competitor-analysis#skill"),
+        ("Media Summary", "/new?skill=media-summary#skill"), ("Competitor Analysis", "/new?skill=competitor-analysis#skill"),
         ("Marketing Brief", "/new#brief"), ("Executive Update", "/new?skill=executive-update#skill"),
-        ("Research Synthesis", None), ("Task Prioritisation", None), ("Follow-up Management", None),
+        ("Research Synthesis", "/new?skill=research-synthesis#skill"),
+        ("Task Prioritisation", "/new?skill=task-prioritisation#skill"),
+        ("Follow-up Management", "/new?skill=follow-up-management#skill"),
     )
     STARTERS = ("What needs my attention in this workstream?", "Challenge this campaign idea.",
                 "Help me prepare a strategic recommendation.")
