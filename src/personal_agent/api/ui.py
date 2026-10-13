@@ -98,7 +98,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
   letter-spacing: .05em; text-transform: uppercase; }
 .brand small { display: block; margin-top: 2px; color: var(--rail-text); font-size: 10px; font-weight: 500; letter-spacing: .1em; }
 .brand .mark { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #6366f1, #7e22ce); display: flex;
-  align-items: center; justify-content: center; font-size: 16px; font-weight: 700; flex: none; letter-spacing: 0; }
+  align-items: center; justify-content: center; flex: none; }
+.mark svg { width: 62%; height: 62%; display: block; }
+.signin .mark { width: 64px; height: 64px; border-radius: 16px; background: linear-gradient(135deg, #6366f1, #7e22ce); display: flex;
+  align-items: center; justify-content: center; margin-bottom: 20px; }
 .rail { overflow-y: auto; }
 /* On a short window the whole rail scrolls; the list never slides under the foot. */
 .rail-scroll { flex: 1 0 416px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 8px 12px 0; }
@@ -489,6 +492,13 @@ _ICONS = {
 }
 
 
+# The mark: two Cs, one inside the other, for the owner and her digital twin, and the pearl that is
+# the full stop in the name. Drawn in brand/build_marks.py; the paths here are its output. It sits on
+# the gradient tile the stylesheet draws, so the same shapes serve the rail and the sign-in page.
+MARK = ('<svg viewBox="0 0 256 256" aria-hidden="true"><path fill="#ffffff" d="M205.59 59.82A101 101 0 1 0 219.65 159.84A13 13 0 0 0 195.54 150.1A75 75 0 1 1 185.1 75.83A13 13 0 0 0 205.59 59.82Z"/><path fill="#ddd6fe" d="M172.49 85.68A59 59 0 1 0 180.7 144.1A13 13 0 0 0 156.6 134.36A33 33 0 1 1 152 101.68A13 13 0 0 0 172.49 85.68Z"/><path fill="#ffffff" d="M192 208a20 20 0 1 0 40 0a20 20 0 1 0 -40 0Z"/></svg>')
+ICON_LINKS = ('<link rel="icon" type="image/svg+xml" href="/static/brand/favicon.svg"/>'
+              '<link rel="alternate icon" type="image/png" href="/static/brand/favicon-32.png"/>'
+              '<link rel="apple-touch-icon" href="/static/brand/tile-180.png"/>')
 THEME_HEAD = """<script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.dataset.theme='dark'}catch(e){}</script>"""
 THEME_SCRIPT = """<script>
 (function () {
@@ -568,10 +578,11 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
 <meta name="robots" content="noindex, nofollow"/>
 {f'<meta http-equiv="refresh" content="{refresh}"/>' if refresh else ""}
 <title>{escape(title)} · {escape(brand)}</title>
+{ICON_LINKS}
 <style>{CSS}</style>{THEME_HEAD}</head>
 <body>
 <header class="rail">
-  <div class="brand"><span class="mark" aria-hidden="true">{escape(brand[:1])}.</span><span>{escape(brand)}.<small>Executive intelligence</small></span></div>
+  <div class="brand"><span class="mark">{MARK}</span><span>{escape(brand)}.<small>Executive intelligence</small></span></div>
   <div class="rail-scroll">
     <nav aria-label="Screens">{"".join(link(*screen) for screen in SCREENS)}</nav>
     <h2>Workstreams <a href="/files" aria-label="Manage workstreams">{icon("plus")}</a></h2>
@@ -613,9 +624,11 @@ def sign_in_page(brand: str, message: str = "", next_path: str = "/", with_code:
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="robots" content="noindex, nofollow"/>
 <title>Sign in · {escape(brand)}</title>
+{ICON_LINKS}
 <style>{CSS}</style>{THEME_HEAD}</head>
 <body>
 <main class="signin">
+  <span class="mark">{MARK}</span>
   <h1>{escape(brand)}.</h1>
   <p class="lede">Sign in with your email and password.</p>
   {note}

@@ -42,7 +42,11 @@ SKILLS = {
     "research-synthesis": "Research Synthesis",
     "task-prioritisation": "Task Prioritisation",
     "follow-up-management": "Follow-up Management",
+    "logo-critique": "Logo and Identity Critique",
 }
+# This one looks at pictures: its files are shown to the model as images, not read as text.
+VISION_SKILLS = {"logo-critique"}
+MAX_IMAGES = 8
 # These two work from the workstream's own open tasks, so they can run with nothing pasted.
 TASK_SKILLS = {"task-prioritisation", "follow-up-management"}
 MAX_REVISIONS = 3
@@ -132,6 +136,10 @@ def build_skill_graph(skill: str, h):
             )
             material.append({"source": "open tasks recorded for this workstream",
                              "text": listed or "No open task is recorded for this workstream."})
+        if skill in VISION_SKILLS:
+            if not inputs.get("source_paths"):
+                raise StepFailed("there is no image of the mark to look at, so the work was not started")
+            return {"material": material, "revisions": 0}  # the images are rendered at the model step, never kept in state
         if not material and not (inputs.get("source_paths") or []):
             raise StepFailed("there is no material to work from, so the work was not started")
         for path in inputs.get("source_paths") or []:
@@ -145,8 +153,15 @@ def build_skill_graph(skill: str, h):
         payload = {"skill": label, "request": str(inputs.get("request") or ""),
                    "owner_comment": state.get("owner_comment", ""),
                    "previous": state.get("body", "") if state.get("owner_comment") else ""}
+        images = None
+        if skill in VISION_SKILLS:
+            pages = h.render_work(state["client"], list(inputs.get("source_paths") or []))
+            images = [(f"Image {p.number} ({p.source})", p.image) for p in pages if p.image][:MAX_IMAGES]
+            if not images:
+                raise StepFailed("none of the files could be shown as an image; give a PNG, a JPG or a PDF")
         out, usage = steps.run_model(
             h, "skill_produce", state, payload, rubric, [(m["source"], m["text"]) for m in state.get("material", [])],
+            images=images,
         )
         return {**usage, "title": out["title"], "body": out["body"], "gaps": out.get("gaps", []),
                 "owner_comment": "", "approval_error": None}

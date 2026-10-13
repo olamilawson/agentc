@@ -43,7 +43,7 @@ def test_each_skill_ships_a_rubric_and_is_offered_on_the_screens(settings):
     page = client.get("/new?skill=copy-review").text
     assert '<option value="copy-review" selected>Copy Review</option>' in page and "Run this skill" in page
     think = client.get("/think").text
-    assert 'href="/new?skill=reputation-assessment#skill"' in think and think.count("Agent workflow") == 15
+    assert 'href="/new?skill=reputation-assessment#skill"' in think and think.count("Agent workflow") == 16
 
 
 def test_a_skill_works_to_its_rubric_from_the_material_and_waits_for_the_owner(settings):
@@ -127,6 +127,34 @@ def test_the_other_three_new_skills_still_need_material(settings):
     run_id = _run(client, skill="media-summary", request="Summarise this week.", material="The Guardian, 12 Oct: fees rise.")
     assert client.get(f"/runs/{run_id}").json()["workflow"] == "media-summary"
     assert "Media Summary: Savings launch" in client.get("/queue").text
+
+
+def test_the_logo_critique_is_shown_the_mark_as_an_image_and_refuses_a_request_with_none(settings):
+    import io
+
+    from PIL import Image
+
+    class Seeing(Listening):
+        def complete(self, contract, context, images=None, providers=None):
+            self.images = images
+            return super().complete(contract, context, images, providers)
+
+    gateway = Seeing({"skill_produce": [REVIEW]})
+    client = _client(settings, gateway=gateway)
+    none = client.post("/new", data={"workflow": "skill", "skill": "logo-critique", "client_existing": "AltBank",
+                                     "request": "What do you think of this?", "material": "It is blue."})
+    assert "The agent has to see it." in client.get(none.headers["location"]).text
+
+    png = io.BytesIO()
+    Image.new("RGB", (64, 64), "#0d1527").save(png, format="PNG")
+    sent = client.post("/new", data={"workflow": "skill", "skill": "logo-critique", "client_existing": "AltBank",
+                                     "request": "The agency's option A. Is it ready?"},
+                       files=[("source_files", ("option-a.png", png.getvalue()))])
+    run = client.get(f"/runs/{sent.headers['location'].rsplit('/', 1)[1]}").json()
+    assert run["workflow"] == "logo-critique" and run["status"] == "waiting_for_approval", run["error_reason"]
+    assert [label for label, _ in gateway.images] == ["Image 1 (option-a.png)"] and gateway.images[0][1][:2] == b"\xff\xd8"
+    assert "# Logo and identity critique" in gateway.contexts[0] and "never say a mark is clear to use" in gateway.contexts[0]
+    assert "Logo and Identity Critique: Savings launch" in client.get("/queue").text
 
 
 # --- the watcher --------------------------------------------------------------------------

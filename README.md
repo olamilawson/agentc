@@ -93,6 +93,13 @@ this repository implements **Delivery phase 1: Foundation**.
   owner's request and supplied material, with no web access; the result is
   approved, edited then approved, or sent back once per revision, and is
   saved to the workstream's folder. The rubrics are provisional.
+- **The mark** — two Cs, one inside the other (the owner and her digital
+  twin), and a pearl that is the full stop in the name. It is on the sign-in
+  page and the rail, and `api/static/brand/` holds the favicon (a heavier
+  small-size cut) and the app tile. The shapes come from
+  `brand/build_marks.py`, beside this repository.
+- **Logo critique** — the twelfth skill, `logo-critique`, is shown the
+  uploaded mark as an image and scores it on ten criteria.
 - **Mail watcher** — `./deploy/setup.sh --watcher` turns on the hook and
   imports `deploy/n8n-sponsorship-watcher.json` into the server's n8n. The
   watcher posts each new Outlook message as Microsoft describes it to

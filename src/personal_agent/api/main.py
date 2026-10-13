@@ -299,7 +299,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     async def require_session(request: Request, call_next):
         path = request.url.path
         # The fonts are public files, and the sign-in page needs them before any session exists.
-        if path in ("/health", "/login") or path.startswith(("/hooks/", "/static/fonts/")):
+        # The icon is asked for before any sign-in, as the fonts are.
+        if path in ("/health", "/login", "/favicon.ico") or path.startswith(("/hooks/", "/static/fonts/", "/static/brand/")):
             return await call_next(request)
         if guard is None:
             if settings.require_login:
@@ -370,6 +371,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         )
 
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon():
+        return RedirectResponse("/static/brand/favicon-32.png", status_code=308)
 
     @app.get("/health")
     def health() -> dict:
@@ -841,7 +846,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     <label>Material <span class="or">paste the plan, the copy, the coverage, the notes. Task Prioritisation and
       Follow-up Management also read this workstream's open tasks.</span>
       <textarea name="material" rows="6" maxlength="60000"></textarea></label>
-    <label>Or files (PDF, Word or text) <input type="file" name="source_files" multiple/></label>
+    <label>Or files (PDF, Word or text; for a logo critique, the logo as PNG, JPG or PDF)
+      <input type="file" name="source_files" multiple/></label>
     <button class="approve">Run this skill</button>
   </form>
 </section>
@@ -934,6 +940,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             sources = await stored("source_files")
             if isinstance(sources, str):
                 return back(sources)
+            if text("skill") in skill_run.VISION_SKILLS and not sources:
+                return back("Add the logo as a PNG, a JPG or a PDF. The agent has to see it.")
             if not sources and not text("material") and text("skill") not in skill_run.TASK_SKILLS:
                 return back("Give the agent material to work from: paste it, or add a file.")
             workflow = text("skill")
@@ -1675,6 +1683,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     # them open it; the others start a Think question, which is what the agent can do for them today.
     SKILL_LIST = (
         ("Campaign Review", "/new?skill=campaign-review#skill"), ("Creative Review", "/new#creative"),
+        ("Logo and Identity Critique", "/new?skill=logo-critique#skill"),
         ("Copy Review", "/new?skill=copy-review#skill"),
         ("Strategic Recommendation", "/new#draft"), ("Proposal Review", "/new?skill=proposal-review#skill"), ("Approval Memo", "/new#draft"),
         ("Executive Email", "/new?skill=executive-email#skill"), ("Reputation Assessment", "/new?skill=reputation-assessment#skill"),

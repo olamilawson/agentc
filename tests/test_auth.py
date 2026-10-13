@@ -54,12 +54,17 @@ def test_every_screen_and_endpoint_needs_a_session(client):
     font = client.get("/static/fonts/newsreader-latin-wght-normal.woff2")
     assert font.status_code == 200 and font.content[:4] == b"wOF2"
     assert client.get("/static/anything-else.txt").status_code == 401
+    # The icon, too: a browser asks for it before anyone has signed in.
+    icon = client.get("/static/brand/favicon.svg")
+    assert icon.status_code == 200 and icon.text.startswith("<svg") and "<text" not in icon.text
+    assert client.get("/favicon.ico").headers["location"] == "/static/brand/favicon-32.png"
 
 
 def test_sign_in_page_asks_for_email_and_password_and_no_code(client):
     page = client.get("/login").text
     assert 'name="email"' in page and 'name="password"' in page
     assert 'name="code"' not in page and "authenticator" not in page
+    assert '<span class="mark"><svg viewBox="0 0 256 256"' in page and 'href="/static/brand/favicon.svg"' in page  # the mark
 
 
 def test_email_and_password_open_a_session(client):
