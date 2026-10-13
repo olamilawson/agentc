@@ -1,9 +1,14 @@
 # Model route table — tiers map to providers; changing a model never changes code.
 #
-# Every tier points at Groq for now (owner's instruction, 2026-10-13): its key is
-# the one on the server that works. Groq hosts open-weight models; the text of
-# each step goes to Groq under its terms, so keep restricted clients off it
-# until Groq is listed in config/providers.yaml.
+# The mix for a minimally working agent (owner's decision, 2026-10-13): every
+# tier on Groq, whose key is the one on the server that works, with a different
+# model for each tier. Groq counts its free limits for each model, so three
+# models give three allowances; and the strong tier checks the standard tier's
+# work, which a different model does better than the same one.
+#
+# Groq hosts open-weight models; the text of each step goes to Groq under its
+# terms, so restricted clients stay off it until Groq is listed in
+# config/providers.yaml.
 #
 # The model names are from memory and have not been checked against the
 # account. Use "Test this model" on the Settings and cost screen. A choice saved
@@ -12,13 +17,21 @@
 # No fallback is named. A fallback is used only on provider error, and one that
 # points at a provider with no credit would fail too and report its own error
 # in place of the real one. Add `fallback:` lines once a second provider works.
+#
+# Scaling up, in order: move strong to a paid model first (few, short steps that
+# gate what is sent), then standard, then add fallbacks. Leave cheap here.
+
+# Extracting fields, classifying mail, sorting headlines. If these steps fail
+# with "invalid output", this small model is the cause: use the standard one.
 cheap:
-  primary: groq/llama-3.3-70b-versatile
+  primary: groq/llama-3.1-8b-instant
+# Drafting, scoring, Think, the skills.
 standard:
   primary: groq/llama-3.3-70b-versatile
+# Checking evidence and replies, and the weekly learning review.
 strong:
-  primary: groq/llama-3.3-70b-versatile
+  primary: groq/openai/gpt-oss-120b
 # Steps that show the model a picture (creative review, logo critique) use this
-# route whatever their tier, because the model above reads text alone.
+# route whatever their tier, because the models above read text alone.
 vision:
   primary: groq/meta-llama/llama-4-scout-17b-16e-instruct
