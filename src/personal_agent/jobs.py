@@ -13,6 +13,7 @@ JOBS = (
     ("retention", "Retention", "Each day at 02:45"),
     ("learning", "Weekly learning review", "Mondays at 06:00"),
     ("dispatch", "Agency dispatch: send what is due", "Each minute"),
+    ("signals", "Outside signals: read your sources", "Each hour, at 20 past"),
 )
 
 

@@ -1637,7 +1637,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
   </section>
   <section class="card">
     <div class="linkrow"><h2>Intelligence</h2><a href="/intelligence">View all {icon("arrow")}</a></div>
-    <p class="eyebrow">Your watchlist · feed not connected</p>
+    <p class="eyebrow">{f'Your watchlist · {ws_api.incoming_count()} new from your sources' if db.list_watch_sources() else "Your watchlist · feed not connected"}</p>
     {f'<ul class="rows">{watch}</ul>' if watch else '<p class="quiet">No signal on the watchlist yet.</p>'}
   </section>
 </div>

@@ -297,6 +297,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 45 2 * * * root $HERE/deploy/jobs.sh retention >/dev/null 2>&1
 0 6 * * 1 root $HERE/deploy/jobs.sh learning >/dev/null 2>&1
 * * * * * root $HERE/deploy/jobs.sh dispatch >/dev/null 2>&1
+20 * * * * root $HERE/deploy/jobs.sh signals >/dev/null 2>&1
 CRON
   chmod 644 /etc/cron.d/personal-agent
   say "Scheduled the daily backup, the daily retention job and the weekly review. Taking a first backup now"

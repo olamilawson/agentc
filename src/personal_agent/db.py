@@ -211,6 +211,38 @@ signals = Table(
     Column("created_at", String),
 )
 
+# What the owner asked the agent to watch for a workstream: a search term, or a feed's address.
+watch_sources = Table(
+    "watch_sources",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("workstream", String, index=True),
+    Column("kind", String),  # term | feed
+    Column("value", String),
+    Column("last_error", String),  # why the last fetch failed; None when it worked
+    Column("checked_at", String),
+    Column("created_at", String),
+)
+
+# A headline a source returned. It waits in Incoming until the owner adds it to the watchlist or dismisses it.
+feed_items = Table(
+    "feed_items",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("source_id", String, index=True),
+    Column("workstream", String, index=True),
+    Column("fingerprint", String, unique=True),
+    Column("title", String),
+    Column("link", String),
+    Column("publisher", String),
+    Column("published_at", String),
+    Column("summary", String),
+    Column("kind", String),  # reputation | regulation | opportunity | none; None until sorted
+    Column("why", String),  # the model's one line, from the headline alone
+    Column("status", String, index=True),  # new | added | dismissed
+    Column("created_at", String),
+)
+
 # A connector's sign-in, kept so the owner signs in once. Canva's tokens live here.
 connector_tokens = Table(
     "connector_tokens",
@@ -519,6 +551,46 @@ class Database:
     def delete_signal(self, signal_id: str) -> None:
         self._remove(signals, signal_id)
 
+    # --- the outside-signals feed ------------------------------------------------
+    def add_watch_source(self, workstream: str, kind: str, value: str) -> str:
+        return self._insert(watch_sources, workstream=workstream, kind=kind, value=value)
+
+    def list_watch_sources(self, workstream: str | None = None) -> list[dict]:
+        return self._rows(watch_sources, **({"workstream": workstream} if workstream else {}))
+
+    def delete_watch_source(self, source_id: str) -> None:
+        self._remove(watch_sources, source_id)
+
+    def note_watch_source(self, source_id: str, error: str | None) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(watch_sources).where(watch_sources.c.id == source_id).values(last_error=error, checked_at=now()))
+
+    def add_feed_item(self, source_id: str, workstream: str, fingerprint: str, **item) -> str | None:
+        """Keep a headline the workstream has not seen. Returns its id, or None for one already held."""
+        with self.engine.begin() as cx:
+            if cx.execute(select(feed_items.c.id).where(feed_items.c.fingerprint == fingerprint)).first():
+                return None
+            item_id = new_id()
+            cx.execute(insert(feed_items).values(
+                id=item_id, source_id=source_id, workstream=workstream, fingerprint=fingerprint, status="new",
+                created_at=now(), **item,
+            ))
+        return item_id
+
+    def get_feed_item(self, item_id: str) -> dict | None:
+        return next(iter(self._rows(feed_items, id=item_id)), None)
+
+    def list_feed_items(self, status: str = "new") -> list[dict]:
+        return self._rows(feed_items, status=status)
+
+    def sort_feed_item(self, item_id: str, kind: str, why: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(feed_items).where(feed_items.c.id == item_id).values(kind=kind, why=why))
+
+    def set_feed_item_status(self, item_id: str, status: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(feed_items).where(feed_items.c.id == item_id).values(status=status))
+
     # --- connector sign-ins -----------------------------------------------------
     def get_connector(self, name: str) -> dict | None:
         with self.engine.connect() as cx:
@@ -566,7 +638,7 @@ class Database:
     def forget_client_settings(self, client: str) -> None:
         with self.engine.begin() as cx:
             # A deleted client's tasks, decisions, knowledge and signals go with it.
-            for table in (tasks, decisions, memory_items, signals, dispatches):
+            for table in (tasks, decisions, memory_items, signals, dispatches, watch_sources, feed_items):
                 cx.execute(delete(table).where(table.c.workstream == client))
             cx.execute(delete(client_settings).where(client_settings.c.name == client))
             cx.execute(delete(restricted_clients).where(restricted_clients.c.name == client))

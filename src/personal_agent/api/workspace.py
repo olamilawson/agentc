@@ -17,11 +17,12 @@ from types import SimpleNamespace
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from personal_agent import learning
 from personal_agent.api import ui
+from personal_agent.engine import signal_scan
 
 STATUSES = {"todo": ("To do", "c-slate"), "in_progress": ("In progress", "c-blue"),
             "awaiting_approval": ("Awaiting approval", "c-amber"), "done": ("Done", "c-emerald")}
@@ -32,7 +33,7 @@ DECISIONS = {"approved": ("Approved", "c-emerald"), "changes": ("Changes request
 FILTERS = (("open", "Open"), ("all", "All"), ("decisions", "Decisions"), ("risk", "At risk"), ("done", "Done"))
 DUE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 # Runs that are not items of work: a question on Think, and the agent's own weekly review.
-NOT_WORK = {"think", "studio", learning.WORKFLOW}
+NOT_WORK = {"think", "studio", "signal-scan", learning.WORKFLOW}
 
 
 def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, sheet_script, cap_banner,
@@ -476,6 +477,61 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
         db.delete_signal(signal_id)
         return back("/intelligence", "/intelligence")
 
+    # --- the feed: sources, and what they bring in ------------------------------------------
+    @app.post("/signals/sources")
+    async def add_source(request: Request):
+        form = await fields(request)
+        ws, kind = known(str(form.get("workstream") or "").strip()), str(form.get("kind") or "")
+        value = str(form.get("value") or "").strip()[:300]
+        if not ws or kind not in ("term", "feed") or not value:
+            raise HTTPException(400, "choose a workstream, and give a search term or a feed's address")
+        if kind == "feed":
+            try:
+                signal_scan.check_address(value)
+            except signal_scan.FeedError as e:
+                raise HTTPException(400, str(e))
+        source = db.add_watch_source(ws, kind, value)
+        db.audit(None, "watch_source_added", {"source": source, "workstream": ws, "kind": kind})
+        if "text/html" in request.headers.get("accept", ""):
+            return back("/intelligence#sources", "/intelligence")
+        return {"source": source}
+
+    @app.post("/signals/sources/{source_id}/delete")
+    def delete_source(source_id: str):
+        db.delete_watch_source(source_id)
+        db.audit(None, "watch_source_removed", {"source": source_id})
+        return back("/intelligence#sources", "/intelligence")
+
+    @app.post("/signals/refresh")
+    def refresh_signals(request: Request, background: BackgroundTasks):
+        """Read every source now. It runs after this answer; the page shows the result when it is opened again."""
+        background.add_task(signal_scan.scan_all, engine)
+        if "text/html" in request.headers.get("accept", ""):
+            return back("/intelligence#incoming", "/intelligence")
+        return {"started": True}
+
+    @app.post("/signals/incoming/{item_id}")
+    async def decide_incoming(item_id: str, request: Request):
+        """The owner's call on a headline: it joins the watchlist, with its link as the source, or it is dismissed."""
+        item = db.get_feed_item(item_id)
+        if not item or item["status"] != "new":
+            raise HTTPException(404, "no such headline waiting")
+        form = await fields(request)
+        if form.get("decision") == "add":
+            kind = str(form.get("kind") or item["kind"] or "")
+            if kind not in SIGNALS:
+                raise HTTPException(400, "choose reputation, regulation or opportunity")
+            db.add_signal(item["workstream"], kind, item["title"],
+                          "A headline from a feed. Read the article before acting on it.",
+                          f"{item['publisher'] or 'publisher not given'}, {item['link']}"[:500])
+            db.set_feed_item_status(item_id, "added")
+        else:
+            db.set_feed_item_status(item_id, "dismissed")
+        return back("/intelligence#incoming", "/intelligence")
+
+    def incoming_count() -> int:
+        return sum(i["kind"] != "none" for i in db.list_feed_items("new"))
+
     def signal_list(ws: str | None = None, kind: str = "all") -> list[dict]:
         return [s for s in db.list_signals() if (not ws or s["workstream"] == ws) and (kind == "all" or s["kind"] == kind)]
 
@@ -489,10 +545,66 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
   <form method="post" action="/signals/{s["id"]}/delete"><button class="quiet-button">Remove</button></form>
 </section>""" for s in signal_list(ws, kind)
         )
+        sources = [s for s in db.list_watch_sources() if not ws or s["workstream"] == ws]
+        incoming = [i for i in db.list_feed_items("new") if (not ws or i["workstream"] == ws)
+                    and (kind == "all" or i["kind"] == kind)]
+        shown = [i for i in incoming if i["kind"] != "none"]
+        set_aside = len(incoming) - len(shown)
+        if sources:
+            banner = (f'The agent reads your {ui.plural(len(sources), "source")} each hour and lists what is new below. '
+                      "A headline is a lead, not a finding: read the article before you act on it. "
+                      "Nothing joins your watchlist until you add it.")
+        else:
+            banner = ("This is your watchlist: each signal is one you add, with its source. Live monitoring is not connected, "
+                      "so the agent adds none. Add a source below and the agent reads it each hour.")
+
+        def item_card(i: dict) -> str:
+            label = SIGNALS.get(i["kind"], ("Not sorted", "c-slate"))
+            when = (i["published_at"] or i["created_at"] or "")[:10]
+            pick = options(SIGNALS, i["kind"] if i["kind"] in SIGNALS else "reputation")
+            return f"""<section class="card signal">
+  <p class="chips">{chip(label)}<span class="tag c-slate">{escape(i["workstream"])}</span></p>
+  <h3><a href="{escape(i["link"])}" rel="noopener noreferrer" target="_blank">{escape(i["title"])}</a></h3>
+  <p class="meta">{escape(i["publisher"] or "Publisher not given")} · {escape(when)} · a headline from a feed, not checked</p>
+  {f'<p class="quiet">The agent\'s reading of the headline: {escape(i["why"])}</p>' if i["why"] else ""}
+  <div class="actions">
+    <form method="post" action="/signals/incoming/{i["id"]}"><select name="kind" aria-label="Kind">{pick}</select>
+      <button name="decision" value="add" class="approve">Add to watchlist</button></form>
+    <form method="post" action="/signals/incoming/{i["id"]}"><button name="decision" value="dismiss" class="quiet-button">Dismiss</button></form>
+  </div>
+</section>"""
+
+        source_rows = "".join(
+            f"""<li><div class="row-static"><span class="lead">{ui.stream_badge(s["workstream"])}
+              <span><b>{escape(s["value"])}</b><small>{escape(s["workstream"])} · {"a search term, read through Google News" if s["kind"] == "term" else "a feed"}
+              {f' · last check failed: {escape(s["last_error"])}' if s["last_error"] else (" · last read " + escape((s["checked_at"] or "")[:16].replace("T", " ")) + " UTC" if s["checked_at"] else " · not read yet")}</small></span></span>
+              <form method="post" action="/signals/sources/{s["id"]}/delete" class="end"><button class="quiet-button" aria-label="Remove this source">{icon("x")}</button></form></div></li>"""
+            for s in sources
+        )
+        feed = f"""<section class="card" id="sources">
+  <div class="linkrow"><h2>Sources</h2>
+    <form method="post" action="/signals/refresh"><button class="quiet-button">Check now</button></form></div>
+  <p class="quiet">A search term goes to Google News as a search, so choose terms you are content to send there. A feed is any
+   RSS or Atom address that starts with https.</p>
+  {f'<ul class="rows">{source_rows}</ul>' if source_rows else ""}
+  <details class="add"><summary>{icon("plus")}Add a source</summary>
+    <form method="post" action="/signals/sources" class="stack">
+      <div class="row two">
+        <label>Workstream <select name="workstream" required>{ws_options(ws)}</select></label>
+        <label>Kind <select name="kind"><option value="term">A search term</option><option value="feed">A feed's address</option></select></label>
+      </div>
+      <label>The term, or the address <input type="text" name="value" maxlength="300" required/></label>
+      <button class="approve">Watch this</button>
+    </form></details>
+</section>
+<h2 id="incoming">Incoming <span class="meta">{len(shown)} new{f", {set_aside} set aside as not relevant" if set_aside else ""}</span></h2>
+<div class="signals">{"".join(item_card(i) for i in shown[:30]) or '<p class="quiet">No new headline from your sources.</p>'}</div>
+<h2>Your watchlist</h2>
+"""
         return f"""{ws_chips("/intelligence", ws, kind=kind)}
 <div class="toolbar">{tabs("/intelligence", ws, kind, (("all", "All"),) + tuple((k, v[0]) for k, v in SIGNALS.items()), "kind")}</div>
-<p class="banner" role="status">This is your watchlist: each signal is one you add, with its source. Live monitoring is not connected,
- so the agent adds none.</p>
+<p class="banner" role="status">{banner}</p>
+{feed}
 <details class="card add"><summary>{icon("plus")}Add a signal</summary>
   <form method="post" action="/signals" class="stack">
     <label>What changed <input type="text" name="title" maxlength="200" required/></label>
@@ -534,5 +646,5 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
     return SimpleNamespace(
         items=items, filtered=filtered, open_count=open_count, ws_chips=ws_chips, known=known, chip=chip,
         decision_sheets=decision_sheets, memory_sections=memory_sections, activity=activity,
-        watchlist=watchlist, signal_list=signal_list, due_label=due_label, row=row,
+        watchlist=watchlist, signal_list=signal_list, due_label=due_label, row=row, incoming_count=incoming_count,
     )

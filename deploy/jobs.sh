@@ -6,6 +6,7 @@
 #   retention   daily   removes files and run content past each client's period
 #   learning    weekly  reviews the week's decisions and proposes rule changes
 #   dispatch    each minute  sends an approved agency brief once its recall window ends
+#   signals     each hour    reads the sources on the Intelligence screen for new headlines
 #
 # By hand:  /opt/personal-agent/deploy/jobs.sh backup
 set -uo pipefail
@@ -19,7 +20,8 @@ case "$JOB" in
   retention) run() { docker compose exec -T api python -m personal_agent.retention; } ;;
   learning)  run() { docker compose exec -T api python -m personal_agent.learning; } ;;
   dispatch)  run() { docker compose exec -T api python -m personal_agent.engine.dispatch; } ;;
-  *) echo "Use: jobs.sh backup | retention | learning | dispatch"; exit 2 ;;
+  signals)   run() { docker compose exec -T api python -m personal_agent.engine.signal_scan; } ;;
+  *) echo "Use: jobs.sh backup | retention | learning | dispatch | signals"; exit 2 ;;
 esac
 
 LOG_DIR=/var/log/personal-agent

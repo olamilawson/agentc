@@ -100,6 +100,14 @@ this repository implements **Delivery phase 1: Foundation**.
   `brand/build_marks.py`, beside this repository.
 - **Logo critique** — the twelfth skill, `logo-critique`, is shown the
   uploaded mark as an image and scores it on ten criteria.
+- **Outside signals** — `engine/signal_scan.py`. The owner names sources for
+  a workstream on the Intelligence screen: a search term, read through Google
+  News' RSS search, or any https RSS or Atom feed. An hourly job fetches them,
+  keeps the headlines not seen before, and lists them under Incoming. When
+  something is new, one cheap model step sorts each headline (reputation,
+  regulation, opportunity, or not relevant) with a line of why; with no model
+  the headlines still arrive, unsorted. Feed text is outside material and
+  travels as marked data. Nothing joins the watchlist until the owner adds it.
 - **Mail watcher** — `./deploy/setup.sh --watcher` turns on the hook and
   imports `deploy/n8n-sponsorship-watcher.json` into the server's n8n. The
   watcher posts each new Outlook message as Microsoft describes it to
