@@ -33,7 +33,7 @@ DECISIONS = {"approved": ("Approved", "c-emerald"), "changes": ("Changes request
 FILTERS = (("open", "Open"), ("all", "All"), ("decisions", "Decisions"), ("risk", "At risk"), ("done", "Done"))
 DUE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 # Runs that are not items of work: a question on Think, and the agent's own weekly review.
-NOT_WORK = {"think", "studio", "signal-scan", learning.WORKFLOW}
+NOT_WORK = {"think", "studio", "signal-scan", learning.WORKFLOW}  # a booking request is shown: it waits for the owner
 
 
 def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, sheet_script, cap_banner,

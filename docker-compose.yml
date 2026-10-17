@@ -33,6 +33,9 @@ services:
       CANVA_CLIENT_SECRET: ${CANVA_CLIENT_SECRET:-}
       HIGGSFIELD_API_KEY_ID: ${HIGGSFIELD_API_KEY_ID:-}
       HIGGSFIELD_API_KEY_SECRET: ${HIGGSFIELD_API_KEY_SECRET:-}
+      # Cal.com bookings (deploy/calcom.md): the API key answers bookings; the secret checks Cal.com's webhook.
+      CALCOM_API_KEY: ${CALCOM_API_KEY:-}
+      CALCOM_WEBHOOK_SECRET: ${CALCOM_WEBHOOK_SECRET:-}
       # Where Canva sends you back after you sign in to it.
       PERSONAL_AGENT_PUBLIC_URL: ${PERSONAL_AGENT_PUBLIC_URL:-https://ijeoma.pro}
       # Set by ./deploy/setup.sh --local-model once Ollama runs on this server.

@@ -29,6 +29,7 @@ from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
 from personal_agent import auth, connectors, costs, jobs, learning, retention, tracing
+from personal_agent.engine import bookings
 from personal_agent.engine import dispatch as agency_dispatch
 from personal_agent.engine import skill_run, think
 from personal_agent.engine.runner import Engine, UnknownWorkflow
@@ -432,6 +433,29 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             raise HTTPException(400, str(e))
         return {"run_id": run_id, "run": db.get_run(run_id)}
 
+    @app.post("/hooks/calcom")
+    async def calcom_booking(request: Request, x_cal_signature_256: str | None = Header(default=None)) -> dict:
+        """Cal.com's webhook. Only a delivery signed with the shared secret is read."""
+        secret = os.environ.get("CALCOM_WEBHOOK_SECRET")
+        if not secret:
+            raise HTTPException(503, "the Cal.com webhook is not configured")
+        body = await request.body()
+        if not bookings.signature_ok(body, x_cal_signature_256, secret):
+            db.audit(None, "webhook_refused", {"hook": "calcom"})
+            raise HTTPException(401, "bad or missing signature")
+        try:
+            event = json.loads(body)
+        except ValueError:
+            raise HTTPException(422, "not JSON")
+        try:
+            done = bookings.take(engine, event)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, f"not a booking the agent can read: {type(e).__name__}")
+        except costs.MonthlyCapReached as e:
+            raise HTTPException(429, str(e))
+        db.audit(done.get("run_id"), "calcom_event", {"trigger": event.get("triggerEvent"), **{k: v for k, v in done.items() if k != "run_id"}})
+        return done
+
     @app.post("/hooks/n8n/outlook", status_code=201)
     async def outlook_mail(request: Request, x_agent_secret: str | None = Header(default=None)) -> dict:
         """The same hook, fed a message as Microsoft Graph describes it, so the watcher needs
@@ -553,7 +577,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 f"""<section class="card">
                   <h3>{escape(c["subject"] or "Call")}</h3>
                   <p>{escape(c["label"])}</p>
-                  <p class="meta">with {escape(c["sender"])}</p>{forms}
+                  <p class="meta">with {escape(c["sender"])}</p>{'<p class="meta">Booked through Cal.com. Move or cancel it there; this screen follows.</p>' if (c["event_id"] or "").startswith("calcom:") else forms}
                 </section>"""
             )
         earlier = "".join(
@@ -1277,6 +1301,13 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             + "<br/>".join(f"<code>{escape(name)}</code> ({cls}): {escape(does)}" for name, cls, does in c["tools"])
             + "</td></tr>"
             for c in connectors.status(db)
+        ) + (
+            f"""<tr><td><strong>Cal.com bookings</strong><br/><span class="meta">"""
+            + ("Connected." if os.environ.get("CALCOM_WEBHOOK_SECRET") and os.environ.get("CALCOM_API_KEY") else
+               "Not connected: the server has no " + " or ".join(n for n in ("CALCOM_WEBHOOK_SECRET", "CALCOM_API_KEY") if not os.environ.get(n)) + ".")
+            + """</span></td><td>A booking that needs confirmation waits in Review. Approving confirms it in Cal.com;
+             rejecting declines it, with your reason. Webhook address: <code>/hooks/calcom</code> on this site
+             (<code>deploy/calcom.md</code>).</td></tr>"""
         )
         def job_line(last: dict | None) -> str:
             if last is None:
@@ -1918,6 +1949,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 "acknowledge": ("Acknowledge, send nothing", "Acknowledge it and the agent sends nothing."),
                 "invite": ("Approve and send this invitation", "Approve it and the agent sends this invitation."),
                 "move": ("Approve and move this call", "Approve it and the agent moves this call."),
+                "booking": ("Approve and confirm this booking",
+                            "Approve it and Cal.com confirms the booking and tells the person who made it."),
                 "cancel": ("Approve and cancel this call", "Approve it and the agent cancels this call."),
                 "outline": ("Approve outline and start the draft", "Approve the outline and the agent starts the draft."),
                 "save": ("Approve and save this document", "Approve it and the agent saves this document."),

@@ -36,7 +36,7 @@ from personal_agent.engine.sponsorship_triage import (
 from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
 from personal_agent.engine.think import build_think_graph, think_contracts, think_outputs
 from personal_agent.engine import dispatch as agency_dispatch
-from personal_agent.engine import signal_scan, skill_run
+from personal_agent.engine import bookings, signal_scan, skill_run
 from personal_agent.engine import studio as studio_runs
 from personal_agent.graph_mail import GraphError, GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
@@ -138,6 +138,8 @@ class Harness:
         self.tools.register(ToolSpec(name="cancel_calendar_event", cls=ToolClass.RELEASE, fn=self._cancel_event))
         # Read-class: when the owner's calendar is busy. Free and busy times only.
         self.tools.register(ToolSpec(name="read_calendar", cls=ToolClass.READ, fn=self._read_calendar))
+        # Release-class: confirming a Cal.com booking tells the person at once, so it waits for approval like a send.
+        self.tools.register(ToolSpec(name=bookings.TOOL, cls=ToolClass.RELEASE, fn=lambda p: bookings.confirm(p["uid"])))
         # Release-class: an approved brief to an agency, with its files from the workstream's folder.
         self.tools.register(ToolSpec(name=agency_dispatch.TOOL, cls=ToolClass.RELEASE, fn=self._send_agency_brief))
         # Canva and Higgsfield: draft-class tools that make something and save it to the client's folder.
@@ -324,6 +326,7 @@ WORKFLOWS: dict[str, Workflow] = {
     "think": Workflow(build_think_graph, think_outputs),
     # Each skill is a workflow of its own name, so the learning review reads it against its own rubric.
     **{name: Workflow(build, skill_run.skill_outputs, revises=True) for name, build in skill_run.builders().items()},
+    bookings.WORKFLOW: Workflow(bookings.build_booking_graph, bookings.booking_outputs, bookings.booking_rejected),
     signal_scan.WORKFLOW: Workflow(signal_scan.build_scan_graph, signal_scan.scan_outputs),
     studio_runs.WORKFLOW: Workflow(studio_runs.build_studio_graph, studio_runs.studio_outputs),
     agency_dispatch.WORKFLOW: Workflow(

@@ -50,7 +50,8 @@ for arg in "$@"; do
       openai) names="OPENAI_API_KEY" ;; anthropic) names="ANTHROPIC_API_KEY" ;;
       groq) names="GROQ_API_KEY" ;; openrouter) names="OPENROUTER_API_KEY" ;;
       canva) names="CANVA_CLIENT_ID CANVA_CLIENT_SECRET" ;; higgsfield) names="HIGGSFIELD_API_KEY_ID HIGGSFIELD_API_KEY_SECRET" ;;
-      *) echo "Unknown service '$arg'. Use openai, anthropic, groq, openrouter, canva or higgsfield."; exit 1 ;;
+      calcom) names="CALCOM_API_KEY" ;;
+      *) echo "Unknown service '$arg'. Use openai, anthropic, groq, openrouter, canva, higgsfield or calcom."; exit 1 ;;
     esac
     for name in $names; do
       printf 'Paste the %s value %s and press Enter (it does not show): ' "$arg" "$name"
@@ -61,6 +62,18 @@ for arg in "$@"; do
       unset value
     done
     echo "Saved for $arg."
+    if [ "$arg" = "calcom" ] && ! grep -q '^CALCOM_WEBHOOK_SECRET=.\+' .env; then
+      # The webhook's secret is made here and shown once, for Cal.com's Secret field and nowhere else.
+      hook_secret=$(openssl rand -hex 32)
+      set_env CALCOM_WEBHOOK_SECRET "$hook_secret"
+      echo
+      echo "In Cal.com, Settings, Developer, Webhooks, add a webhook:"
+      echo "  Subscriber URL:  https://ijeoma.pro/hooks/calcom"
+      echo "  Secret:          $hook_secret"
+      echo "  Events:          Booking requested, created, rescheduled, cancelled and rejected"
+      echo "Paste that secret into Cal.com's Secret field only. Not into a chat, an email or a note."
+      unset hook_secret
+    fi
   fi
   [ "$prev" = "--local-model" ] && LOCAL_MODEL="$arg"
   prev="$arg"

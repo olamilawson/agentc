@@ -108,6 +108,12 @@ this repository implements **Delivery phase 1: Foundation**.
   regulation, opportunity, or not relevant) with a line of why; with no model
   the headlines still arrive, unsorted. Feed text is outside material and
   travels as marked data. Nothing joins the watchlist until the owner adds it.
+- **Cal.com bookings** — `engine/bookings.py`. A booking on the owner's
+  Cal.com page that requires confirmation arrives through a signed webhook
+  (`/hooks/calcom`) and waits in Review. Approving confirms it through
+  Cal.com's API, a release like a send; rejecting declines it with the owner's
+  reason. Bookings, reschedules and cancellations made in Cal.com are followed
+  on the Calls screen. Setup: `deploy/calcom.md`.
 - **Mail watcher** — `./deploy/setup.sh --watcher` turns on the hook and
   imports `deploy/n8n-sponsorship-watcher.json` into the server's n8n. The
   watcher posts each new Outlook message as Microsoft describes it to
