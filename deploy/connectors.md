@@ -71,8 +71,27 @@ The sign-in is kept in the database so you are not asked again. It is
 therefore inside the daily backup; the backups are readable by root alone.
 "Disconnect" on the Studio screen removes it from this server.
 
+## Exa web search
+
+Lets the agent read the web for Research on Think and for any skill: tick
+"Search the web first" and the agent searches with your question or request,
+reads the top five pages, and cites each page it uses by its link.
+
+1. Create a key at dashboard.exa.ai. A new account comes with free credit.
+2. On the server:
+
+   ```bash
+   cd /opt/personal-agent && git pull && ./deploy/setup.sh --key exa
+   ```
+
+Your question or request goes to Exa as the search. A page's text is outside
+material: the agent cites it and does not treat it as checked. If a search
+cannot run (no credit, Exa down), the work goes on without the web and says so.
+Each search costs a fraction of a cent from the Exa account; the Settings and
+cost screen does not count it.
+
 ## A restricted client
 
 A workstream marked restricted reaches neither service until you list
-`canva` or `higgsfield` under `approved_for_confidential` in
+`canva`, `higgsfield` or `exa` under `approved_for_confidential` in
 `config/providers.yaml`.

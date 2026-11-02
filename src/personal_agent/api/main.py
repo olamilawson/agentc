@@ -815,6 +815,14 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         needed = {KEY_NAMES.get(route.primary.split("/", 1)[0].lower()) for route in settings.route_table.values()}
         return sorted(name for name in needed if name and not os.environ.get(name))
 
+    def _web_choice(what: str) -> str:
+        """The box that lets a step search the web first, and what it costs the owner in privacy."""
+        if connectors.BY_NAME["exa"].missing():
+            return ('<p class="meta">Web search is not connected. Add an Exa key on the server with '
+                    '<code>./deploy/setup.sh --key exa</code> to let the agent read the web.</p>')
+        return (f'<label class="tick"><input type="checkbox" name="web"/> Search the web first '
+                f'<span class="or">{escape(what)} goes to Exa as a search; the pages found are cited, not checked</span></label>')
+
     @app.get("/new", response_class=HTMLResponse)
     def new_work_page(notice: str = "", skill: str = "") -> str:
         names = engine.harness.clients.list_clients()
@@ -871,6 +879,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         f'<option value="{name}"{" selected" if name == skill else ""}>{escape(label)}</option>'
         for name, label in skill_run.SKILLS.items())}</select></label>{client_fields}
     <label>Your request <textarea name="request" rows="3" maxlength="8000" required></textarea></label>
+    {_web_choice("the request")}
     <label>Material <span class="or">paste the plan, the copy, the coverage, the notes. Task Prioritisation and
       Follow-up Management also read this workstream's open tasks.</span>
       <textarea name="material" rows="6" maxlength="60000"></textarea></label>
@@ -970,10 +979,11 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 return back(sources)
             if text("skill") in skill_run.VISION_SKILLS and not sources:
                 return back("Add the logo as a PNG, a JPG or a PDF. The agent has to see it.")
-            if not sources and not text("material") and text("skill") not in skill_run.TASK_SKILLS:
+            if not sources and not text("material") and text("skill") not in skill_run.TASK_SKILLS and form.get("web") != "on":
                 return back("Give the agent material to work from: paste it, or add a file.")
             workflow = text("skill")
-            inputs = {"request": text("request"), "material": text("material").replace("\r\n", "\n")[:60_000],
+            inputs = {"request": text("request"), "web": form.get("web") == "on",
+                      "material": text("material").replace("\r\n", "\n")[:60_000],
                       "source_paths": sources}
         else:
             return back("That kind of work is not one the agent does.")
@@ -1753,9 +1763,14 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             inputs, out = r["inputs"] or {}, r["outputs"] or {}
             if out.get("answer"):
                 caveats = "".join(f"<li>{escape(str(c))}</li>" for c in out.get("caveats", []))
+                links = "".join(
+                    f'<li><a href="{escape(s["url"])}" rel="noopener noreferrer" target="_blank">{escape(s["title"])}</a>'
+                    f'{" · " + escape(s["published"]) if s.get("published") else ""}</li>'
+                    for s in out.get("sources", []) if str(s.get("url", "")).startswith(("http://", "https://"))
+                )
                 body = f'<pre class="say">{escape(out["answer"])}</pre>' + (
                     f'<p class="eyebrow">Assumed or not checked</p><ul class="notes say">{caveats}</ul>' if caveats else ""
-                )
+                ) + (f'<p class="eyebrow">Web pages it read, not checked</p><ul class="notes">{links}</ul>' if links else "")
             elif r["status"] == "failed":
                 body = f'<p class="error">{escape(r["error_reason"] or "This run failed.")}</p>'
             elif inputs.get("question") is None:
@@ -1774,6 +1789,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
   {f'<form method="post" action="/think/{r["id"]}/save"><button>Save to memory</button></form>' if out.get("answer") else ""}
 </section>""")
         waiting = any(r["id"] == wait and r["status"] in ("queued", "running") for r in past)
+        web_choice = _web_choice("your question")
         starters = "".join(
             f'<a href="/think?start={quote(text)}">{escape(text)}</a>' for text in STARTERS
         )
@@ -1807,6 +1823,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     </div>
     <label>Context <span class="or">the agent reads this workstream's knowledge and no other's</span>
       <select name="client"><option value="">No workstream</option>{options}</select></label>
+    {web_choice}
     <button class="approve">Ask this question</button>
   </form>
 </section>
@@ -1841,6 +1858,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             "question": question[:8000], "material": str(form.get("material") or "").replace("\r\n", "\n")[:100_000],
             "depth": depth if depth in think.DEPTHS else "considered",
             "mode": str(form.get("mode") or "") if str(form.get("mode") or "") in think.MODES else "ask",
+            "web": form.get("web") == "on",
         }
         try:
             run_id = engine.start_run("think", client, inputs, work=False)

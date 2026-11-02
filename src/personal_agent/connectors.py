@@ -103,7 +103,15 @@ CONNECTORS = (
             ConnectorTool("higgsfield_generate_video", ToolClass.DRAFT, "Generates a short video from a prompt and saves it to the client's folder."),
         ),
     ),
+    Connector(
+        name="exa", label="Exa web search", needs=("EXA_API_KEY",),
+        tools=(
+            ConnectorTool("web_search", ToolClass.READ, "Searches the web and reads the text of the pages it finds, for Research on Think and for skills."),
+        ),
+    ),
 )
+EXA_API = "https://api.exa.ai/search"
+WEB_RESULTS, WEB_PAGE_CHARS = 5, 3000
 BY_NAME = {c.name: c for c in CONNECTORS}
 
 
@@ -366,7 +374,34 @@ def register(tools: ToolGateway, db: Database, settings: Settings, clients) -> N
 
         return run
 
+    def web_search(payload: dict, scope: ClientScope) -> dict:
+        """One Exa search, with each page's text. The query is the owner's own question."""
+        query = str(payload.get("query") or "").strip()[:500]
+        if not query:
+            raise ConnectorNotReady("web_search was not run: it needs a query.")
+        try:
+            with _http() as http:
+                response = http.post(EXA_API, headers={"x-api-key": os.environ.get("EXA_API_KEY", "")}, json={
+                    "query": query, "numResults": WEB_RESULTS, "type": "auto",
+                    "contents": {"text": {"maxCharacters": WEB_PAGE_CHARS}},
+                })
+        except httpx.HTTPError as e:
+            raise ConnectorNotReady(f"Exa could not be reached ({type(e).__name__})") from e
+        if response.status_code == 402:
+            raise ConnectorNotReady("Exa has no credit left on this account")
+        if response.status_code != 200:
+            raise ConnectorNotReady(f"Exa refused the search ({_why(response)})")
+        body = response.json()
+        results = [
+            {"title": str(r.get("title") or r.get("url") or "")[:300], "url": str(r.get("url") or ""),
+             "published": (str(r.get("publishedDate"))[:10] if r.get("publishedDate") else None),
+             "text": str(r.get("text") or "")[:WEB_PAGE_CHARS]}
+            for r in body.get("results") or [] if str(r.get("url") or "").startswith(("http://", "https://"))
+        ]
+        return {"query": query, "results": results, "cost_usd": (body.get("costDollars") or {}).get("total")}
+
     handlers = {
+        "web_search": web_search,
         "canva_create_design": canva_create, "canva_export_design": canva_export,
         "higgsfield_generate_image": generate("image", 5), "higgsfield_generate_video": generate("video", 15),
     }

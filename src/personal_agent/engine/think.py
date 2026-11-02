@@ -16,6 +16,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
+from personal_agent.engine import web
 from personal_agent.engine.graph import ROLE
 from personal_agent.harness.budgets import BudgetTracker
 from personal_agent.harness.context import build_context
@@ -66,6 +67,7 @@ class ThinkState(TypedDict, total=False):
     flags: list[str]
     answer: str
     caveats: list[str]
+    sources: list[dict]
     fallback_used: bool
     error: str | None
 
@@ -92,7 +94,10 @@ def think_contracts() -> dict[str, StepContract]:
 def think_outputs(state: dict) -> dict | None:
     if not state.get("answer"):
         return None
-    return {"answer": state["answer"], "caveats": state.get("caveats", [])}
+    out = {"answer": state["answer"], "caveats": state.get("caveats", [])}
+    if state.get("sources"):
+        out["sources"] = state["sources"]
+    return out
 
 
 def build_think_graph(h):
@@ -103,19 +108,23 @@ def build_think_graph(h):
         if tier not in h.settings.route_table:  # a route table without that tier: use what it has
             tier = "standard" if "standard" in h.settings.route_table else next(iter(h.settings.route_table), tier)
         base = h.contracts["think"]
-        contract = base.model_copy(update={"tier": tier, "instruction": base.instruction + MODES.get(inputs.get("mode"), "")})
         material = inputs.get("material") or ""
+        # With the owner's leave, the web first: a search on the question, its pages in the material as data.
+        pages, sources, web_note = web.gather(h, state, inputs.get("question", ""), "search") if inputs.get("web") else ([], [], None)
+        extra = MODES.get(inputs.get("mode"), "") + (web.CITE if pages else "")
+        contract = base.model_copy(update={"tier": tier, "instruction": base.instruction + extra})
         payload = {"question": inputs.get("question", ""), "material": material}
         tracker = BudgetTracker(h.settings.budgets)
         context, flags = build_context(
-            ROLE + h.standing(state["client"]), "", [], [("pasted material", material)] if material else [],
+            ROLE + h.standing(state["client"]), "", [], ([("pasted material", material)] if material else []) + pages,
             {"question": payload["question"], "client": state["client"]},
         )
         runner = h.node_runner(tracker, state["run_id"])
         out = runner.run(contract, payload, context=context)
         return {
             "answer": out["answer"],
-            "caveats": out.get("caveats", []),
+            "caveats": out.get("caveats", []) + ([web_note] if web_note else []),
+            "sources": sources,
             "flags": state.get("flags", []) + flags,
             "usage": {"tokens_in": tracker.tokens_in, "tokens_out": tracker.tokens_out, "cost_usd": tracker.cost_usd},
             "fallback_used": runner.fallback_used,

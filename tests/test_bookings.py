@@ -17,7 +17,8 @@ from personal_agent.harness.models import RecordedGateway
 SECRET = "hook-secret-not-real"
 
 
-def booking(trigger: str, uid: str = "bk-1", start: str = "2026-10-22T09:00:00Z", **more) -> dict:
+# Far ahead, so a booking is always in the future whatever day the tests run.
+def booking(trigger: str, uid: str = "bk-1", start: str = "2030-10-22T09:00:00Z", **more) -> dict:
     return {"triggerEvent": trigger, "createdAt": "2026-10-17T10:00:00Z", "payload": {
         "uid": uid, "title": "Sponsorship call between Chidimma and Ada Obi", "startTime": start,
         "endTime": start.replace("09:00", "09:30"), "status": "PENDING",
@@ -75,7 +76,7 @@ def test_a_requested_booking_waits_in_review_and_approving_confirms_it_in_calcom
     assert post(client, booking("BOOKING_REQUESTED")).json() == {"duplicate": True}
     review = client.get("/queue").text
     assert "Approve and confirm this booking" in review and "Booked through Cal.com by Ada Obi" in review
-    assert "Thursday 22 October 2026, 10:00 to 10:30 Lagos time" in review and "About the March summit." in review
+    assert "Tuesday 22 October 2030, 10:00 to 10:30 Lagos time" in review and "About the March summit." in review
 
     client.post(f"/runs/{done['run_id']}/approval", data={"decision": "approved", "comment": "Yes."})
     sent = cal.calls[0]
@@ -113,10 +114,10 @@ def test_calcom_changes_are_followed_and_answering_in_calcom_clears_review(setti
     _, client = _client(settings)
     post(client, booking("BOOKING_CREATED", uid="bk-direct"))  # a booking with no confirmation step
     assert [c["event_id"] for c in client.get("/calls").json()] == ["calcom:bk-direct"]
-    post(client, booking("BOOKING_RESCHEDULED", uid="bk-moved", start="2026-10-23T09:00:00Z", rescheduleUid="bk-direct"))
+    post(client, booking("BOOKING_RESCHEDULED", uid="bk-moved", start="2030-10-23T09:00:00Z", rescheduleUid="bk-direct"))
     states = {c["event_id"]: c["status"] for c in client.get("/calls").json()}
     assert states == {"calcom:bk-direct": "cancelled", "calcom:bk-moved": "scheduled"}
-    post(client, booking("BOOKING_CANCELLED", uid="bk-moved", start="2026-10-23T09:00:00Z"))
+    post(client, booking("BOOKING_CANCELLED", uid="bk-moved", start="2030-10-23T09:00:00Z"))
     assert {c["status"] for c in client.get("/calls").json()} == {"cancelled"}
 
     run_id = post(client, booking("BOOKING_REQUESTED", uid="bk-2")).json()["run_id"]

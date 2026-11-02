@@ -24,7 +24,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
-from personal_agent.engine import steps
+from personal_agent.engine import steps, web
 from personal_agent.engine.strategy_drafting import _slug
 from personal_agent.gateway.tools import content_hash
 from personal_agent.harness.contract import Limits, StepContract, StepFailed
@@ -84,6 +84,8 @@ class SkillState(TypedDict, total=False):
     approval_error: str | None
     approved_hash: str
     filed: dict
+    sources: list[dict]
+    web_note: str | None
     error: str | None
 
 
@@ -110,7 +112,8 @@ def skill_contracts() -> dict[str, StepContract]:
 def skill_outputs(state: dict) -> dict | None:
     if not state.get("body"):
         return None
-    return {"subject": state.get("title"), "body": state["body"], "gaps": state.get("gaps", []), "filed": state.get("filed")}
+    return {"subject": state.get("title"), "body": state["body"], "gaps": state.get("gaps", []), "filed": state.get("filed"),
+            **({"sources": state["sources"]} if state.get("sources") else {})}
 
 
 def build_skill_graph(skill: str, h):
@@ -140,13 +143,18 @@ def build_skill_graph(skill: str, h):
             if not inputs.get("source_paths"):
                 raise StepFailed("there is no image of the mark to look at, so the work was not started")
             return {"material": material, "revisions": 0}  # the images are rendered at the model step, never kept in state
-        if not material and not (inputs.get("source_paths") or []):
+        if not material and not (inputs.get("source_paths") or []) and not inputs.get("web"):
             raise StepFailed("there is no material to work from, so the work was not started")
         for path in inputs.get("source_paths") or []:
             read = h.tools.call(state["run_id"], "intake", ["read_client_file"], "read_client_file",
                                 {"client": state["client"], "path": path})
             material.append({"source": f"file: {path}", "text": read["text"]})
-        return {"material": material, "revisions": 0}
+        found: dict = {}
+        if inputs.get("web"):  # with the owner's leave: a search on the request, its pages as material
+            pages, sources, note = web.gather(h, state, str(inputs.get("request") or ""), "intake")
+            material += [{"source": source, "text": text} for source, text in pages]
+            found = {"sources": sources, "web_note": note}
+        return {"material": material, "revisions": 0, **found}
 
     def produce(state: SkillState) -> dict:
         inputs = state["inputs"] or {}
@@ -160,8 +168,10 @@ def build_skill_graph(skill: str, h):
             images = [(f"Image {p.number} ({p.source})", p.image) for p in pages if p.image][:limit]
             if not images:
                 raise StepFailed("none of the files could be shown as an image; give a PNG, a JPG or a PDF")
+        # Web pages in the material: the rubric's "no web access" gives way to citing each page's link.
+        searched = any(m["source"].startswith("web page:") for m in state.get("material", []))
         out, usage = steps.run_model(
-            h, "skill_produce", state, payload, rubric, [(m["source"], m["text"]) for m in state.get("material", [])],
+            h, "skill_produce", state, payload, rubric + ("\n\n## Web pages" + web.CITE if searched else ""), [(m["source"], m["text"]) for m in state.get("material", [])],
             images=images,
         )
         return {**usage, "title": out["title"], "body": out["body"], "gaps": out.get("gaps", []),
@@ -174,6 +184,9 @@ def build_skill_graph(skill: str, h):
         """One pause for the owner: approve, edit then approve, or send back with a comment."""
         payload = payload_of(state)
         notes = [f"Not established or assumed: {gap}" for gap in state.get("gaps", [])]
+        if state.get("web_note"):
+            notes.append(state["web_note"])
+        notes += [f"Web page used: {s['title']} ({s['url']})" for s in state.get("sources", [])]
         notes.append("Approving saves this to the workstream's folder. It sends nothing.")
         resume = interrupt({
             "type": "approval", "content": payload, "content_hash": content_hash(payload),

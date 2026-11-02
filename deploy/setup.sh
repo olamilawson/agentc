@@ -50,8 +50,8 @@ for arg in "$@"; do
       openai) names="OPENAI_API_KEY" ;; anthropic) names="ANTHROPIC_API_KEY" ;;
       groq) names="GROQ_API_KEY" ;; openrouter) names="OPENROUTER_API_KEY" ;;
       canva) names="CANVA_CLIENT_ID CANVA_CLIENT_SECRET" ;; higgsfield) names="HIGGSFIELD_API_KEY_ID HIGGSFIELD_API_KEY_SECRET" ;;
-      calcom) names="CALCOM_API_KEY" ;;
-      *) echo "Unknown service '$arg'. Use openai, anthropic, groq, openrouter, canva, higgsfield or calcom."; exit 1 ;;
+      calcom) names="CALCOM_API_KEY" ;; exa) names="EXA_API_KEY" ;;
+      *) echo "Unknown service '$arg'. Use openai, anthropic, groq, openrouter, canva, higgsfield, calcom or exa."; exit 1 ;;
     esac
     for name in $names; do
       printf 'Paste the %s value %s and press Enter (it does not show): ' "$arg" "$name"

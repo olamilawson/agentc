@@ -33,6 +33,8 @@ services:
       CANVA_CLIENT_SECRET: ${CANVA_CLIENT_SECRET:-}
       HIGGSFIELD_API_KEY_ID: ${HIGGSFIELD_API_KEY_ID:-}
       HIGGSFIELD_API_KEY_SECRET: ${HIGGSFIELD_API_KEY_SECRET:-}
+      # Exa web search, for Research on Think and for skills. Empty: the agent reads no web page.
+      EXA_API_KEY: ${EXA_API_KEY:-}
       # Cal.com bookings (deploy/calcom.md): the API key answers bookings; the secret checks Cal.com's webhook.
       CALCOM_API_KEY: ${CALCOM_API_KEY:-}
       CALCOM_WEBHOOK_SECRET: ${CALCOM_WEBHOOK_SECRET:-}

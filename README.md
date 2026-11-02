@@ -108,6 +108,12 @@ this repository implements **Delivery phase 1: Foundation**.
   regulation, opportunity, or not relevant) with a line of why; with no model
   the headlines still arrive, unsorted. Feed text is outside material and
   travels as marked data. Nothing joins the watchlist until the owner adds it.
+- **Web search** — `engine/web.py`, through Exa (`connectors.py`). When the
+  owner ticks "Search the web first" on Think or on a skill, the agent searches
+  with the question or request, reads the top five pages, and cites each page
+  it uses by its link. Pages are outside material, marked as data; a search
+  that cannot run lets the work go on and says why. A restricted workstream's
+  question reaches Exa only once Exa is approved for confidential work.
 - **Cal.com bookings** — `engine/bookings.py`. A booking on the owner's
   Cal.com page that requires confirmation arrives through a signed webhook
   (`/hooks/calcom`) and waits in Review. Approving confirms it through
