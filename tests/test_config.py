@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 
 from personal_agent.config import REPO_ROOT, load_settings
@@ -49,3 +50,14 @@ def test_checkpoints_follow_the_database(settings):
         postgres_conninfo("postgresql+psycopg://personal_agent:p%40ss@postgres:5432/personal_agent")
         == "postgresql://personal_agent:p%40ss@postgres:5432/personal_agent"
     )
+
+
+def test_every_config_file_the_app_reads_is_named_in_the_image():
+    # Inside the image the package cannot find config/ by itself, so each file needs its line in the Dockerfile.
+    source = (REPO_ROOT / "src" / "personal_agent" / "config.py").read_text(encoding="utf-8")
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    variables = set(re.findall(r'from_yaml\("(PERSONAL_AGENT_\w+)"', source))
+    variables |= set(re.findall(r'"(PERSONAL_AGENT_\w+)"[^\n]*REPO_ROOT / "config"', source))
+    assert "PERSONAL_AGENT_ENQUIRIES" in variables and "PERSONAL_AGENT_ROUTE_TABLE" in variables
+    missing = sorted(v for v in variables if f"{v}=/app/config/" not in dockerfile)
+    assert missing == []

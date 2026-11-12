@@ -21,6 +21,7 @@ ENV PERSONAL_AGENT_ROUTE_TABLE=/app/config/route_table.yaml \
     PERSONAL_AGENT_CORE=/app/config/core.yaml \
     PERSONAL_AGENT_CONNECTORS=/app/config/connectors.yaml \
     PERSONAL_AGENT_WORKSTREAMS=/app/config/workstreams.yaml \
+    PERSONAL_AGENT_ENQUIRIES=/app/config/enquiries.yaml \
     PERSONAL_AGENT_SHIPPED_SKILLS_DIR=/app/skills \
     PERSONAL_AGENT_SKILLS_DIR=/app/data/skills \
     PERSONAL_AGENT_CLIENTS_DIR=/app/data/clients \
