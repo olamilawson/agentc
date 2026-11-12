@@ -186,31 +186,53 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         return forwarded.split(",")[-1].strip() if forwarded else (request.client.host if request.client else "")
 
     # --- pieces of the public pages ---------------------------------------------------------------
-    def wordmark() -> str:
-        return (f'<a class="wordmark" href="https://chidimma.com/ijeoma-pro/"><span class="mark">{ui.MARK}</span>'
-                f'<span>{escape(policy.name)}<small>{escape(policy.owner_full_name)}</small></span></a>')
+    # What the twin works on, drawn around her on the request page.
+    PILLS = [("layers", "Brand &amp;", "Growth"), ("megaphone", "Communications", "&amp; Reputation"),
+             ("laptop", "Innovation", "&amp; Digital"), ("draft", "Writing &amp;", "Thought Leadership")]
+
+    def brand() -> str:
+        return (f'<a class="pub-brand" href="https://chidimma.com/ijeoma-pro/" aria-label="{escape(policy.name)}, by '
+                f'{escape(policy.owner_full_name)}"><span class="ij" aria-hidden="true">ij<i>.</i></span>'
+                f'<span class="pub-name" aria-hidden="true">{escape(policy.name)}<small>By {escape(policy.owner_full_name)}</small></span></a>')
+
+    def headline(words: str) -> str:
+        """A headline with the brand's full stop in orange."""
+        return f'{escape(words.rstrip("."))}<span class="fullstop">.</span>'
+
+    def twin() -> str:
+        pills = "".join(
+            f'<span class="pill p{i}">{icon(glyph)}<span>{top}<br/>{bottom}</span></span>'
+            for i, (glyph, top, bottom) in enumerate(PILLS, start=1)
+        )
+        return (f'<div class="twin" aria-hidden="true">{ui.SPARK}<img src="/static/brand/twin.webp" alt="" width="410" height="480"/>'
+                f'{pills}</div>')
 
     def journey(items: list[tuple[str, str]], current: int) -> str:
         return '<ol class="journey">' + "".join(
             f'<li data-step-mark data-state="{"done" if i < current else "current" if i == current else "next"}">'
-            f'<span><b>{escape(title)}</b><small>{escape(text)}</small></span></li>'
+            f'<span><b>{escape(title)}</b>{escape(text)}</span></li>'
             for i, (title, text) in enumerate(items)
         ) + "</ol>"
 
-    def story(eyebrow: str, title: str, lede: str, steps: str, foot: str) -> str:
-        return (f'{wordmark()}<div class="story-body"><p class="eyebrow">{escape(eyebrow)}</p><h1>{escape(title)}</h1>'
-                f'<p class="lede">{escape(lede)}</p>{steps}</div><p class="story-foot">{foot}</p>')
+    def hero(title: str, sub: str, extra: str = "") -> str:
+        return f'<h1>{headline(title)}</h1><p class="sub">{escape(sub)}</p>{extra}'
 
-    def foot() -> str:
-        # No sign-in link: visitors have no account here, and the owner signs in at /login directly.
-        links = [f'<a href="{escape(url)}">{label}</a>'
-                 for url, label in ((policy.privacy_url, "Privacy Policy"), (policy.terms_url, "Terms of Use")) if url]
-        return (f'<footer class="public-foot"><span>{escape(policy.name)} is an AI agent that works alongside '
-                f'{escape(policy.owner_full_name)}.</span><span>{" · ".join(links)}</span></footer>')
+    def links() -> str:
+        privacy = (f'<a href="{escape(policy.privacy_url)}" target="_blank" rel="noopener">Privacy Policy</a>'
+                   if policy.privacy_url else "Privacy Policy")
+        if policy.terms_url:
+            return (f'agree to the <a href="{escape(policy.terms_url)}" target="_blank" rel="noopener">Terms of Use</a> '
+                    f'and acknowledge the {privacy}')
+        return f"acknowledge the {privacy}"
+
+    def assure(action: str = "continuing") -> str:
+        # Sending the form is the agreement, as the owner's design has it; terms_at records when.
+        return (f'<div class="assure">{icon("shield")}<span class="rule" aria-hidden="true"></span>'
+                f'<p>By {action}, you {links()}.</p></div>')
 
     def field(name: str, label: str, values: dict, wrong: dict, *, kind: str = "text", need: str = "", hint: str = "",
               placeholder: str = "", required: bool = True, wide: bool = False, rows: int = 0, limit: int = 0,
-              minimum: int = 0, auto: str = "") -> str:
+              minimum: int = 0, auto: str = "", optional_note: bool = False) -> str:
         value, error = values.get(name, ""), wrong.get(name, "")
         limit = limit or enq.LIMITS.get(name) or enq.BRIEF_FIELDS.get(name) or 200
         attrs = [f'id="f-{name}"', f'name="{name}"', f'maxlength="{limit}"', f'data-need="{escape(need)}"',
@@ -224,9 +246,10 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
                    f'<span class="counter" data-count="f-{name}" aria-live="polite"></span>' if rows
                    else f'<input type="{kind}" {common} value="{escape(value)}"/>')
         star = '<b class="req" aria-hidden="true">*</b>' if required else ""
+        note = '<span class="opt">(optional)</span>' if optional_note else ""
         aside = f' <span class="hint">{escape(hint)}</span>' if hint else ""
         # The message sits outside the label, so it is read as a description, not as part of the field's name.
-        return (f'<div class="field{" wide" if wide else ""}"><label for="f-{name}">{escape(label)}{star}{aside}</label>{control}'
+        return (f'<div class="field{" wide" if wide else ""}"><label for="f-{name}">{escape(label)}{star}{note}{aside}</label>{control}'
                 f'<p class="field-error" id="{name}-error" role="alert">{escape(error)}</p></div>')
 
     def person_fields(values: dict, wrong: dict) -> str:
@@ -234,32 +257,18 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         return ('<div class="grid">'
                 + f("first_name", "First name", need="Add your first name.", placeholder="Your first name", auto="given-name")
                 + f("last_name", "Last name", need="Add your last name.", placeholder="Your last name", auto="family-name")
-                + f("organisation", "Organisation or business", need="Add where you work, or what you do.",
-                    placeholder="Where you work or what you do", auto="organization")
-                + f("role", "Role or profession", need="Add your role.", placeholder="Your role or professional focus",
-                    auto="organization-title")
                 + f("email", "Email address", kind="email", need="Add an email address, such as name@company.com.",
-                    placeholder="you@example.com", auto="email")
-                + f("phone", "Phone number", kind="tel", need="Add a phone number with its country code.",
-                    placeholder="+234", auto="tel")
+                    placeholder="you@example.com", auto="email", wide=True)
+                + f("organisation", "Organisation or business", placeholder="Where you work", auto="organization",
+                    required=False, optional_note=True)
+                + f("role", "Role or profession", placeholder="Your role or focus area", auto="organization-title",
+                    required=False, optional_note=True)
                 + "</div>")
 
-    def consents(values: dict, wrong: dict, *, ask_terms: bool = True, ask_marketing: bool = True, agreed: str = "") -> str:
-        privacy = (f'<a href="{escape(policy.privacy_url)}" target="_blank" rel="noopener">Privacy Policy</a>'
-                   if policy.privacy_url else "Privacy Policy")
-        what = (f'the <a href="{escape(policy.terms_url)}" target="_blank" rel="noopener">Terms of Use</a> and {privacy}'
-                if policy.terms_url else f"the {privacy}")
-        terms = (f'<label class="consent"><input type="checkbox" name="terms" required data-need="Agree to the terms to continue."'
-                 f' aria-describedby="terms-error" aria-invalid="{"true" if wrong.get("terms") else "false"}"'
-                 f'{" checked" if values.get("terms") else ""}/><span>I agree to {what}, including the use of my details '
-                 f'to provide and personalise access.</span></label><p class="field-error" id="terms-error" role="alert">'
-                 f'{escape(wrong.get("terms", ""))}</p>') if ask_terms else (
-            f'<p class="meta">You agreed to {what} on {escape(agreed)}.</p>' if agreed else "")
-        marketing = (f'<label class="consent"><input type="checkbox" name="marketing"{" checked" if values.get("marketing") else ""}/>'
-                     f'<span>I agree to receive insights, announcements, opportunities and promotional communications about '
-                     f'{escape(policy.owner_full_name)}, her projects, businesses, collaborations and partners. I can opt out of '
-                     f'marketing communications at any time.<span class="optional">Optional</span></span></label>') if ask_marketing else ""
-        return terms + marketing
+    def marketing(values: dict) -> str:
+        return (f'<label class="consent"><input type="checkbox" name="marketing"{" checked" if values.get("marketing") else ""}/>'
+                f'<span>I&#8217;d like to receive insights, updates and opportunities from {escape(policy.owner_full_name)} '
+                f'and her ventures.</span></label>')
 
     def trap() -> str:
         # A field people never see. A program that fills every field fills this one, and its request is dropped.
@@ -267,15 +276,16 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
                 'tabindex="-1" autocomplete="off"/></label></div>')
 
     def submit(label: str, sending: str) -> str:
-        return (f'<button type="submit" class="approve" data-sending="{escape(sending)}"><span data-label>{escape(label)}</span>'
+        return (f'<button type="submit" class="go" data-sending="{escape(sending)}"><span data-label>{escape(label)}</span>'
                 f'<span class="spinner" aria-hidden="true"></span>{icon("arrow")}</button>')
 
+    def page(title: str, body: str, hero_html: str, *, script: str = "", private: bool = False, flat: bool = False,
+             status: int = 200) -> HTMLResponse:
+        return HTMLResponse(ui.public_page(title, body, hero=hero_html, brand=brand(), script=script, private=private, flat=flat),
+                            status_code=status)
+
     # --- the public request page ------------------------------------------------------------------
-    REQUEST_STEPS = [
-        ("Tell me about yourself", "Your details, and the work you have in mind."),
-        ("I read your request", "Every request comes to me first."),
-        ("Share your brief", f"If the work fits, you get a private link to send your brief to {policy.name}."),
-    ]
+    HERO_SUB = "A conversational, AI-powered extension of my thinking, experience and expertise."
 
     def topic_of(value: str) -> str:
         if value.isdigit() and 1 <= int(value) <= len(policy.topics):
@@ -284,44 +294,25 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
 
     def request_page(values: dict, wrong: dict, notice: str = "", status: int = 200) -> HTMLResponse:
         closed = db.count_enquiries(status="received") >= policy.waiting_cap
-        chosen = values.get("topic", "")
-        chips = "".join(
-            f'<label class="choice"><input type="radio" name="topic" value="{escape(t)}"{" checked" if t == chosen else ""}/>'
-            f'<span>{icon("check")}{escape(t)}</span></label>'
-            for t in [*policy.topics, OTHER_TOPIC]
-        )
+        intro = (f'<p class="kicker">Get started</p><h2 class="card-title">{headline("Let’s get you in.")}</h2>'
+                 f'<p class="card-lede">Request access to my digital twin. I read every request and send you a private link.</p>')
         if closed:
-            body = (f'<div class="notice" role="status" data-state="closed">{icon("clock")}<span>Requests are closed for now while '
-                    f'I catch up. Please try again in a few days.</span></div>{foot()}')
+            body = (f'{intro}<div class="notice" role="status" data-state="closed">{icon("clock")}<span>Requests are closed for now '
+                    f'while I catch up. Please try again in a few days.</span></div>')
         else:
-            body = f"""
-<h2>Request access</h2>
-<p class="intro">A few details help me understand who you are and what you need. It takes about two minutes.</p>
+            body = f"""{intro}
 {f'<div class="notice stop" role="alert">{icon("risk")}<span>{escape(notice)}</span></div>' if notice else ""}
 <form class="pform" method="post" action="/enquire" novalidate data-state="{"error" if wrong or notice else "open"}">
-  <section class="group" aria-labelledby="g-you"><p class="eyebrow" id="g-you">Your details</p>{person_fields(values, wrong)}</section>
-  <section class="group" aria-labelledby="g-work"><p class="eyebrow" id="g-work">The work</p>
-    <fieldset class="choices"><legend>Where would you like help?</legend>{chips}</fieldset>
-    <div class="grid gap-top">{field("message", "Tell me about the work", values, wrong, rows=4, wide=True,
-        need="Tell me about the work in a line or two.", minimum=10,
-        hint="A few lines are enough: what you are working on and where you need help.")}</div>
-  </section>
-  <section class="group" aria-labelledby="g-stay"><p class="eyebrow" id="g-stay">Stay connected</p>{consents(values, wrong)}</section>
+  <input type="hidden" name="topic" value="{escape(values.get("topic", ""))}"/>
+  {person_fields(values, wrong)}
+  {marketing(values)}
   {trap()}
-  <div class="submit-row"><p class="meta"><b class="req" aria-hidden="true">*</b> Required</p>{submit("Request access", "Sending your request")}</div>
+  {submit("Request access", "Sending your request")}
 </form>
 <p class="after">Already have a private link? Open it from the message I sent you.</p>
-{foot()}"""
-        page = ui.public_page(
-            f"Request access · {policy.name}", body,
-            story=story(f"{policy.name} · Request access", "Join my network.",
-                        "Get closer to my ideas, expertise and AI. Tell me a little about yourself to begin.",
-                        journey(REQUEST_STEPS, 0),
-                        f"{escape(policy.name)} is an AI agent that works alongside me. Please keep confidential material "
-                        "for your brief, once you have a private link."),
-            script=FORM_SCRIPT,
-        )
-        return HTMLResponse(page, status_code=status)
+{assure()}"""
+        return page(f"Request access · {policy.name}", body, hero("Explore my digital twin.", HERO_SUB, twin()),
+                    script=FORM_SCRIPT, status=status)
 
     @app.get("/enquire", response_class=HTMLResponse)
     def enquire_page(topic: str = ""):
@@ -335,13 +326,8 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         if str(form.get("website") or "").strip():
             return RedirectResponse("/enquire/sent", status_code=303)  # the hidden field was filled: dropped, without saying so
         fields = enq.clean(form)
-        values = {**fields, "topic": topic_of(str(form.get("topic") or "")), "terms": form.get("terms") == "on",
-                  "marketing": form.get("marketing") == "on"}
+        values = {**fields, "topic": topic_of(str(form.get("topic") or "")), "marketing": form.get("marketing") == "on"}
         wrong = enq.check_person(fields)
-        if len(fields["message"]) < 10:
-            wrong["message"] = "Tell me about the work in a line or two."
-        if not values["terms"]:
-            wrong["terms"] = "Agree to the terms to continue."
         if wrong:
             return request_page(values, wrong, status=400)
         key = enq.address_key(network_address(request), settings.session_secret or "a machine with no session secret")
@@ -352,36 +338,28 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         return RedirectResponse("/enquire/sent", status_code=303)
 
     @app.get("/enquire/sent", response_class=HTMLResponse)
-    def enquiry_sent() -> str:
+    def enquiry_sent():
         body = f"""
 <div class="outcome" data-state="received">
   <div class="seal">{icon("check")}</div>
-  <h2>Thank you. Your request is with me.</h2>
+  <h2 class="card-title">{headline("Thank you. It’s with me.")}</h2>
   <p>I read every request myself. If the work fits, I will send you a private link to share your brief with {escape(policy.name)}.</p>
   <ul class="next">
     <li>{icon("mail")}<span>Watch for a message from me at the email address you gave.</span></li>
     <li>{icon("clock")}<span>Each private link works for {policy.invite_days} days from the day I send it.</span></li>
   </ul>
-  <a class="button" href="https://chidimma.com/">Back to chidimma.com</a>
-</div>
-{foot()}"""
-        return ui.public_page(
-            f"Request sent · {policy.name}", body,
-            story=story(f"{policy.name} · Request access", "Join my network.",
-                        "Get closer to my ideas, expertise and AI.", journey(REQUEST_STEPS, 1),
-                        f"{escape(policy.name)} is an AI agent that works alongside me."),
-        )
+  <a class="go" href="https://chidimma.com/">Back to chidimma.com {icon("arrow")}</a>
+</div>"""
+        return page(f"Request sent · {policy.name}", body, hero("Explore my digital twin.", HERO_SUB, twin()))
 
     # --- the private brief page ---------------------------------------------------------------------
-    BRIEF_STEPS = [("Your details", "Check them, and agree to the terms."),
+    BRIEF_STEPS = [("Your details", "Check them before you share the brief."),
                    ("Your brief", "What the work should achieve, and any files."),
                    ("Sent", "I review everything before I reply.")]
 
-    def brief_story(e: dict, current: int) -> str:
-        return story(f"{policy.name} · Private brief", "Share your brief.",
-                     f"This link is for {e['first_name']}. It works until {day(e['expires_at'])}.",
-                     journey(BRIEF_STEPS, current),
-                     f"{escape(policy.name)} reads your brief first and prepares notes for me. I review everything before I reply.")
+    def brief_hero(e: dict, current: int) -> str:
+        return hero("Share your brief.", f"This link is for {e['first_name']}. It works until {day(e['expires_at'])}.",
+                    journey(BRIEF_STEPS, current))
 
     def gone_page(state: str, e: dict | None) -> HTMLResponse:
         words = {
@@ -394,13 +372,12 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
                         "I will reply at the email address you gave.", 200),
         }[state]
         body = (f'<div class="outcome" data-state="{state}"><div class="seal{"" if state == "briefed" else " wait"}">'
-                f'{icon("check" if state == "briefed" else "link")}</div><h2>{escape(words[0])}</h2><p>{escape(words[1])}</p>'
-                f'{"" if state == "briefed" else '<a class="button approve" href="/enquire">Request access</a>'}</div>{foot()}')
-        return HTMLResponse(ui.public_page(
-            f"Private brief · {policy.name}", body, private=True,
-            story=story(f"{policy.name} · Private brief", "Share your brief.", "A private link from Chidimma.", "",
-                        f"{escape(policy.name)} is an AI agent that works alongside {escape(policy.owner_full_name)}."),
-        ), status_code=words[2])
+                f'{icon("check" if state == "briefed" else "link")}</div><h2 class="card-title">{headline(words[0])}</h2>'
+                f'<p>{escape(words[1])}</p>'
+                f'{"" if state == "briefed" else f"""<a class="go" href="/enquire">Request access {icon("arrow")}</a>"""}</div>')
+        return page(f"Private brief · {policy.name}", body,
+                    hero("Share your brief.", f"A private link from {policy.owner_full_name}."),
+                    private=True, flat=True, status=words[2])
 
     def brief_page(token: str, e: dict, values: dict, wrong: dict, step: int, notice: str = "", status: int = 200) -> HTMLResponse:
         f = lambda *a, **k: field(*a, values=values, wrong=wrong, **k)  # noqa: E731
@@ -412,16 +389,16 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
   <div class="step" data-step-name="details">
     <h2>Your details</h2>
     <p class="intro">Check these before you share the brief. I reply to the email address here.</p>
-    <section class="group"><p class="eyebrow">About you</p>{person_fields(values, wrong)}</section>
-    <section class="group"><p class="eyebrow">Stay connected</p>{consents(values, wrong, ask_terms=not e["terms_at"],
-        ask_marketing=not e["marketing_at"], agreed=day(e["terms_at"]))}</section>
-    <div class="step-nav"><span class="meta">This link accepts {left} brief{"s" if left != 1 else ""} until {escape(day(e["expires_at"]))}.</span>
-      <button type="button" class="approve" data-go="2">Continue to your brief {icon("arrow")}</button></div>
+    {person_fields(values, wrong)}
+    {"" if e["marketing_at"] else marketing(values)}
+    {assure("sending your brief") if not e["terms_at"] else ""}
+    <div class="step-nav gap-top"><span class="meta">This link accepts {left} brief{"s" if left != 1 else ""} until {escape(day(e["expires_at"]))}.</span>
+      <button type="button" class="go" data-go="2">Continue {icon("arrow")}</button></div>
   </div>
   <div class="step" data-step-name="brief">
     <h2>Your brief</h2>
     <p class="intro">Share what you know now. Gaps are fine: I come back with questions.</p>
-    <section class="group"><p class="eyebrow">The work</p><div class="grid">
+    <section class="group"><div class="grid">
       {f("project", "Project name", need="Give the project a name.", placeholder="For example, Spring launch", wide=True)}
       {f("objective", "What should this work achieve?", rows=4, wide=True, minimum=20,
          need="Say what the work should achieve, in a sentence or two.",
@@ -433,7 +410,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
       {f("dates", "Key dates", required=False, hint="Deadlines, launches, events.")}
       {f("notes", "Anything else I should know", rows=3, wide=True, required=False)}
     </div></section>
-    <section class="group"><p class="eyebrow">Files</p>
+    <section class="group">
       <label class="drop" data-state="idle">{icon("upload")}<b>Attach your brief or supporting files</b>
         <span>Drop them here, or choose files. PDF, Word, PowerPoint, text or images; up to {enq.MAX_FILES} files, 10 MB each.</span>
         <span data-files aria-live="polite"></span>
@@ -441,17 +418,16 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
       <ul class="files"></ul>
       <p class="meta">{escape(policy.name)} reads PDF, Word and text files. Images and slides come to me as they are.</p>
     </section>
-    <div class="step-nav"><button type="button" class="button" data-go="1">{icon("back")} Back to your details</button>
+    <div class="step-nav"><button type="button" class="button" data-go="1">{icon("back")} Back</button>
       {submit("Send my brief", "Sending your brief")}</div>
   </div>
   {trap()}
-</form>
-{foot()}"""
-        return HTMLResponse(ui.public_page(f"Share your brief · {policy.name}", body, story=brief_story(e, step - 1),
-                                           script=FORM_SCRIPT, private=True), status_code=status)
+</form>"""
+        return page(f"Share your brief · {policy.name}", body, brief_hero(e, step - 1), script=FORM_SCRIPT, private=True,
+                    flat=True, status=status)
 
     def person_values(e: dict) -> dict:
-        return {k: e.get(k) or "" for k in enq.LIMITS if k != "message"}
+        return {k: e.get(k) or "" for k in enq.LIMITS if k not in ("message", "phone")}
 
     @app.get("/brief/{token}", response_class=HTMLResponse)
     def open_brief(token: str):
@@ -470,12 +446,10 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         form = await request.form(max_files=enq.MAX_FILES + 1, max_fields=60)
         if str(form.get("website") or "").strip():
             return RedirectResponse(f"/brief/{token}/sent", status_code=303)
-        person = {k: v for k, v in enq.clean(form).items() if k != "message"}
+        person = {k: v for k, v in enq.clean(form).items() if k not in ("message", "phone")}
         brief = {k: str(form.get(k) or "").strip()[:n].replace("\r\n", "\n") for k, n in enq.BRIEF_FIELDS.items()}
-        values = {**person, **brief, "terms": form.get("terms") == "on", "marketing": form.get("marketing") == "on"}
+        values = {**person, **brief, "marketing": form.get("marketing") == "on"}
         wrong = enq.check_person(person)
-        if not e["terms_at"] and not values["terms"]:
-            wrong["terms"] = "Agree to the terms to continue."
         brief_wrong = enq.check_brief(brief)
         if wrong or brief_wrong:
             return brief_page(token, e, values, {**wrong, **brief_wrong}, 1 if wrong else 2, status=400)
@@ -506,15 +480,14 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         body = f"""
 <div class="outcome" data-state="sent">
   <div class="seal">{icon("check")}</div>
-  <h2>Your brief is in, {escape(e["first_name"])}.</h2>
+  <h2 class="card-title">{headline(f"Your brief is in, {e['first_name']}.")}</h2>
   <p>{reading}</p>
   <ul class="next">
     <li>{icon("mail")}<span>I reply to you at {escape(e["email"])}.</span></li>
     {f'<li>{icon("link")}<span>This link accepts {e["briefs_left"]} more brief{"s" if e["briefs_left"] != 1 else ""} until {escape(day(e["expires_at"]))}. <a href="/brief/{escape(token)}">Send another brief</a></span></li>' if more else ""}
   </ul>
-</div>
-{foot()}"""
-        return ui.public_page(f"Brief sent · {policy.name}", body, story=brief_story(e, 2), private=True)
+</div>"""
+        return page(f"Brief sent · {policy.name}", body, brief_hero(e, 2), private=True, flat=True)
 
     # --- the owner's screen -------------------------------------------------------------------------
     TABS = [("", "All"), ("received", "Waiting for you"), ("invited", "Links live"), ("briefed", "Briefs in"),

@@ -3,10 +3,10 @@
 # brief sent through a live invite link starts an evaluation.
 
 # The name the public pages carry, and whose network a person asks to join.
-name: Ijeoma Pro
+name: Ijeoma.Pro
 owner_full_name: Chidimma Okoli
 
-# Linked from the consent box. With no terms page, the box names the privacy policy alone.
+# Linked in the line under the form. With no terms page, it names the privacy policy alone.
 privacy_url: https://chidimma.com/privacy/
 terms_url:
 

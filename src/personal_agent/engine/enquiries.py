@@ -66,15 +66,16 @@ def address_key(address: str, secret: str) -> str:
 
 
 def check_person(fields: dict) -> dict[str, str]:
-    """The fields the person must give, each checked. Returns {field: what is wrong}."""
+    """The fields the person must give, each checked. Returns {field: what is wrong}.
+    Name and email are required; a phone number is checked only when one is given."""
     wrong = {}
-    for name, label in (("first_name", "your first name"), ("last_name", "your last name"),
-                        ("organisation", "where you work, or what you do"), ("role", "your role")):
+    for name, label in (("first_name", "your first name"), ("last_name", "your last name")):
         if not fields.get(name):
             wrong[name] = f"Add {label}."
     if not ADDRESS.fullmatch(fields.get("email") or ""):
         wrong["email"] = "Add an email address, such as name@company.com."
-    if not PHONE.fullmatch(fields.get("phone") or "") or sum(c.isdigit() for c in fields.get("phone") or "") < 7:
+    phone = fields.get("phone") or ""
+    if phone and (not PHONE.fullmatch(phone) or sum(c.isdigit() for c in phone) < 7):
         wrong["phone"] = "Add a phone number with its country code, such as +234 803 000 0000."
     return wrong
 

@@ -64,8 +64,8 @@ def _invited(client, settings) -> tuple[dict, str]:
 def test_a_visitor_sees_the_request_page_and_nothing_private(client):
     assert client.get("/", headers={"accept": "text/html"}).headers["location"] == "/enquire"
     page = client.get("/enquire?topic=2")
-    assert page.status_code == 200 and "Join my network." in page.text
-    assert 'value="Communications and reputation" checked' in page.text  # chidimma.com can pick the topic
+    assert page.status_code == 200 and "Explore my digital twin" in page.text and "twin.webp" in page.text
+    assert 'name="topic" value="Communications and reputation"' in page.text  # chidimma.com can pick the topic
     assert 'href="https://chidimma.example/privacy/"' in page.text and "Terms of Use" not in page.text  # no terms page yet
     assert 'data-state="open"' in page.text and 'name="website"' in page.text  # the hidden field for programs
     assert "/login" not in page.text and "sign-in" not in page.text.lower()  # visitors see no way into the owner's space
@@ -75,7 +75,7 @@ def test_a_visitor_sees_the_request_page_and_nothing_private(client):
 def test_a_request_is_stored_for_the_owner_and_calls_no_model(client, settings):
     sent = _request(client, marketing="on")
     assert sent.status_code == 303 and sent.headers["location"] == "/enquire/sent"
-    assert "Your request is with me" in client.get("/enquire/sent").text
+    assert "It’s with me" in client.get("/enquire/sent").text
     db = _db(settings)
     e = db.list_enquiries()[0]
     assert (e["status"], e["origin"], e["email"], e["topic"]) == ("received", "request", PERSON["email"], REQUEST["topic"])
@@ -87,10 +87,11 @@ def test_a_request_is_stored_for_the_owner_and_calls_no_model(client, settings):
 
 
 def test_a_request_with_gaps_is_returned_with_each_gap_named_and_nothing_kept(client, settings):
-    page = _request(client, email="not-an-address", role="", terms="", message="Hi")
+    page = _request(client, email="not-an-address", first_name="", role="", message="")
     assert page.status_code == 400
-    for words in ("Add an email address", "Add your role", "Agree to the terms", "Tell me about the work"):
+    for words in ("Add an email address", "Add your first name"):
         assert words in page.text
+    assert "Add your role" not in page.text  # organisation and role are optional
     assert 'value="Kola Foods"' in page.text and 'aria-invalid="true"' in page.text  # what was typed stays
     assert _db(settings).list_enquiries() == []
 
@@ -125,10 +126,10 @@ def test_the_owner_invites_and_the_link_opens_a_private_brief_form(client, setti
     assert f"/brief/{e['token']}" in owner and "Cancel the link" in owner
     client.cookies.clear()  # the person holding the link has no session
     page = client.get(path)
-    assert page.status_code == 200 and "Share your brief." in page.text
+    assert page.status_code == 200 and "Share your brief" in page.text
     assert '<meta name="referrer" content="no-referrer"/>' in page.text  # the link never leaks to another site
     assert "Owner sign-in" not in page.text
-    assert 'value="Ada"' in page.text and "You agreed to the" in page.text  # details carried over, terms agreed once
+    assert 'value="Ada"' in page.text and "By sending your brief" not in page.text  # details carried over, terms agreed once
 
 
 def test_a_brief_through_the_link_is_saved_evaluated_and_closes_the_link(client, settings):
@@ -140,7 +141,7 @@ def test_a_brief_through_the_link_is_saved_evaluated_and_closes_the_link(client,
              ("files", ("mood.png", b"\x89PNG not really", "image/png"))]
     sent = client.post(path, data={**PERSON, **BRIEF}, files=files, headers=browser)
     assert sent.status_code == 303 and sent.headers["location"] == f"{path}/sent"
-    assert "Your brief is in, Ada." in client.get(f"{path}/sent").text
+    assert "Your brief is in, Ada" in client.get(f"{path}/sent").text
 
     db = _db(settings)
     e = db.get_enquiry(e["id"])
@@ -155,7 +156,7 @@ def test_a_brief_through_the_link_is_saved_evaluated_and_closes_the_link(client,
     assert {"brief.txt", "mood.png", brief["file"]} <= names
 
     again = client.get(path)
-    assert again.status_code == 200 and "Your brief reached me." in again.text and "<form" not in again.text
+    assert again.status_code == 200 and "Your brief reached me" in again.text and "<form" not in again.text
     assert client.post(path, data={**PERSON, **BRIEF}).status_code == 200  # a used link takes nothing more
     assert len(db.get_enquiry(e["id"])["briefs"]) == 1
 
@@ -164,7 +165,7 @@ def test_a_brief_with_gaps_returns_to_the_step_that_has_them(client, settings):
     _, path = _invited(client, settings)
     page = client.post(path, data={**PERSON, "project": "", "objective": "Short"})
     assert page.status_code == 400 and 'data-step="2"' in page.text and "Give the project a name." in page.text
-    page = client.post(path, data={**PERSON, "phone": "", **BRIEF})
+    page = client.post(path, data={**PERSON, "email": "", **BRIEF})
     assert page.status_code == 400 and 'data-step="1"' in page.text
     bad = client.post(path, data={**PERSON, **BRIEF}, files=[("files", ("tool.exe", b"MZ", "application/octet-stream"))])
     assert bad.status_code == 400 and "does not take" in bad.text
@@ -191,7 +192,7 @@ def test_links_that_no_longer_open_say_why(client, settings):
     db = _db(settings)
     db.update_enquiry(e["id"], expires_at=(datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(timespec="seconds"))
     page = client.get(path)
-    assert page.status_code == 410 and "This link has expired." in page.text
+    assert page.status_code == 410 and "This link has expired" in page.text
     assert db.get_enquiry(e["id"])["status"] == "expired"
 
     other = enq.invite_direct(db, settings.enquiries, {**PERSON, "email": "b@kolafoods.example"}, "Kola Foods")
@@ -237,10 +238,9 @@ def test_the_owner_can_make_a_link_for_someone_she_knows(client, settings):
     assert (e["status"], e["origin"], e["briefs_left"], e["terms_at"]) == ("invited", "owner", 2, None)
     client.cookies.clear()
     page = client.get(f"/brief/{e['token']}").text
-    assert 'name="terms" required' in page  # they agree on the brief form, since they never saw the request page
+    assert "By sending your brief, you" in page  # they agree on the brief form, since they never saw the request page
     person = {**PERSON, "first_name": "Tunde", "email": "tunde@bank.example"}
-    assert client.post(f"/brief/{e['token']}", data={**person, **BRIEF}).status_code == 400  # terms not ticked
-    assert client.post(f"/brief/{e['token']}", data={**person, **BRIEF, "terms": "on"}).status_code == 303
+    assert client.post(f"/brief/{e['token']}", data={**person, **BRIEF}).status_code == 303
     e = _db(settings).get_enquiry(enquiry_id)
     assert e["status"] == "invited" and e["briefs_left"] == 1 and e["terms_at"] and e["role"] == "Head of Marketing"
     assert "Send another brief" in client.get(f"/brief/{e['token']}/sent").text

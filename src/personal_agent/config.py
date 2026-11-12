@@ -74,7 +74,7 @@ from personal_agent.scheduling import CalendarPolicy  # noqa: E402
 
 class EnquiryPolicy(BaseModel):
     """config/enquiries.yaml: the public request page and invite links."""
-    name: str = "Ijeoma Pro"
+    name: str = "Ijeoma.Pro"
     owner_full_name: str = "Chidimma Okoli"
     privacy_url: str | None = None
     terms_url: str | None = None
