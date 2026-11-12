@@ -278,6 +278,7 @@ def install(app: FastAPI, *, settings, db, engine, render, tags, status_words, s
 <div class="toolbar">{tabs("/work", ws, f)}
   <span class="actions"><a class="button" href="/studio">{icon("creative")}Studio</a>
     <a class="button" href="/dispatch">{icon("arrow")}Agency dispatch</a>
+    <a class="button" href="/enquiries">{icon("mail")}Client enquiries</a>
     <a class="button approve" href="/new">{icon("spark")}Give the agent work</a></span></div>
 {new_task_form(path, ws)}
 <div class="board">{columns}</div>

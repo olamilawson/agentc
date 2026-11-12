@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from personal_agent.api import dispatches, studio, ui, workspace
+from personal_agent.api import dispatches, enquiries as enquiries_api, studio, ui, workspace
 from personal_agent.api.ui import plural
 from personal_agent.config import Settings, load_settings
 from personal_agent.db import Database
@@ -300,8 +300,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     async def require_session(request: Request, call_next):
         path = request.url.path
         # The fonts are public files, and the sign-in page needs them before any session exists.
-        # The icon is asked for before any sign-in, as the fonts are.
-        if path in ("/health", "/login", "/favicon.ico") or path.startswith(("/hooks/", "/static/fonts/", "/static/brand/")):
+        # The icon is asked for before any sign-in, as the fonts are. The request page and a
+        # brief link are for people outside, and call no model (api/enquiries.py).
+        if path in ("/health", "/login", "/favicon.ico") or path.startswith(("/hooks/", "/static/fonts/", "/static/brand/")) \
+                or enquiries_api.is_public(path):
             return await call_next(request)
         if guard is None:
             if settings.require_login:
@@ -311,6 +313,9 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 )
             return await call_next(request)
         if not guard.valid_session(request.cookies.get(auth.SESSION_COOKIE)):
+            # chidimma.com links to this site's address: a visitor there sees the request page.
+            if path == "/" and request.method == "GET":
+                return RedirectResponse("/enquire", status_code=303)
             if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
                 return RedirectResponse(f"/login?next={quote(path)}", status_code=303)
             return JSONResponse({"detail": "sign in first"}, status_code=401)
@@ -358,7 +363,8 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         response.delete_cookie(auth.SESSION_COOKIE, path="/")
         return response
 
-    UP = {"Agent work": "/work", "Agency dispatch": "/work", "Studio": "/work", "Dispatch log": "/dispatch"}
+    UP = {"Agent work": "/work", "Agency dispatch": "/work", "Studio": "/work", "Dispatch log": "/dispatch",
+          "Client enquiries": "/work", "Client enquiry": "/enquiries"}
 
     def _zone() -> ZoneInfo:
         return ZoneInfo(settings.calendar.timezone)
@@ -372,6 +378,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return ui.page(
             title, active, body, brand=settings.brand_name, waiting=waiting, today_count=ws_api.open_count(),
             signed_in=guard is not None, script=script, refresh=refresh, dock=dock, up=up,
+            counts={"enquiries": db.count_enquiries(status="received")},
             clients=engine.harness.clients.list_clients(), today=f"{today:%A}, {today.day} {today:%B %Y}",
         )
 
@@ -1556,6 +1563,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         "creative-review": ("Creative", "c-rose"), "sponsorship-triage": ("Sponsorship", "c-amber"),
         "call-change": ("Calls", "c-emerald"), "think": ("Think", "c-purple"),
         "agency-dispatch": ("Dispatch", "c-emerald"), "studio": ("Studio", "c-purple"),
+        "enquiry-invite": ("Invite link", "c-purple"),
         **{name: (label, "c-purple") for name, label in skill_run.SKILLS.items()},
     }
     STATUS_WORDS = {
@@ -2087,6 +2095,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         sheet_script=SHEET_SCRIPT, cap_banner=_cap_banner, calls_today=_calls_today, fields=_fields, dock=_dock,
     )
     dispatches.install(app, settings=settings, db=db, engine=engine, render=render, ws_api=ws_api, dock=_dock)
+    enquiries_api.install(app, settings=settings, db=db, engine=engine, render=render, ws_api=ws_api, dock=_dock)
     studio.install(app, settings=settings, db=db, engine=engine, render=render, ws_api=ws_api, status_words=STATUS_WORDS)
     return app
 

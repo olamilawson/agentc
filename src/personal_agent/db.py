@@ -278,6 +278,41 @@ dispatches = Table(
     Column("created_at", String),
 )
 
+# A request from outside to send the owner a brief, and the invite link she
+# gives for it. The status column is a state machine, and enquiries.py is the
+# only code that moves it (see docs/STATE-MACHINES.md):
+#   received -> invited | declined;  invited -> briefed | expired | cancelled
+enquiries = Table(
+    "enquiries",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("status", String, index=True),  # received | invited | briefed | declined | cancelled | expired
+    Column("origin", String),  # request: from the public page | owner: an invite she made herself
+    Column("first_name", String),
+    Column("last_name", String),
+    Column("organisation", String),
+    Column("role", String),
+    Column("email", String),
+    Column("phone", String),
+    Column("topic", String),
+    Column("message", String),
+    Column("terms_at", String),  # when the person agreed to the privacy terms
+    Column("marketing_at", String),  # when they opted in to marketing; None: they did not
+    Column("address_key", String, index=True),  # keyed hash of the sender's network address, for the daily limit
+    Column("workstream", String),
+    # The link's secret. Kept as it is, not hashed, so the owner can copy the link
+    # again; it opens one brief form and nothing else.
+    Column("token", String, unique=True),
+    Column("expires_at", String),
+    Column("briefs_left", Integer),
+    Column("briefs", JSON),  # [{at, file, files, run_id, by_hand}]; run_id None: waiting for the owner
+    Column("email_run", String),  # the run that mails the link, once the owner asks for one
+    Column("note", String),
+    Column("decided_at", String),
+    Column("updated_at", String),
+    Column("created_at", String),
+)
+
 # The owner's choice of model for a tier, made on the Settings screen. A row
 # replaces that tier's line in config/route_table.yaml; no row leaves the file's.
 model_routes = Table(
@@ -605,6 +640,61 @@ class Database:
     def delete_connector(self, name: str) -> None:
         with self.engine.begin() as cx:
             cx.execute(delete(connector_tokens).where(connector_tokens.c.name == name))
+
+    # --- enquiries and invite links --------------------------------------------
+    def create_enquiry(self, **fields) -> str:
+        return self._insert(enquiries, updated_at=now(), **fields)
+
+    def get_enquiry(self, enquiry_id: str) -> dict | None:
+        return next(iter(self._rows(enquiries, id=enquiry_id)), None)
+
+    def enquiry_by_token(self, token: str) -> dict | None:
+        return next(iter(self._rows(enquiries, token=token)), None) if token else None
+
+    def list_enquiries(self, status: str | None = None) -> list[dict]:
+        return self._rows(enquiries, **({"status": status} if status else {}))
+
+    def update_enquiry(self, enquiry_id: str, **fields) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(enquiries).where(enquiries.c.id == enquiry_id).values(**fields, updated_at=now()))
+
+    def claim_enquiry(self, enquiry_id: str, was: str, becomes: str, **fields) -> bool:
+        """Move an enquiry from one status to another, if it is still in the first. Two callers cannot both win."""
+        with self.engine.begin() as cx:
+            changed = cx.execute(
+                update(enquiries).where(enquiries.c.id == enquiry_id, enquiries.c.status == was)
+                .values(status=becomes, updated_at=now(), **fields)
+            )
+        return changed.rowcount == 1
+
+    def take_brief_slot(self, enquiry_id: str, moment: str) -> bool:
+        """Use one of a live link's briefs. False: the link is no longer live, or has none left."""
+        with self.engine.begin() as cx:
+            changed = cx.execute(
+                update(enquiries).where(
+                    enquiries.c.id == enquiry_id, enquiries.c.status == "invited",
+                    enquiries.c.briefs_left > 0, enquiries.c.expires_at > moment,
+                ).values(briefs_left=enquiries.c.briefs_left - 1, updated_at=now())
+            )
+        return changed.rowcount == 1
+
+    def count_enquiries(self, *, status: str | None = None, address_key: str | None = None, since: str | None = None) -> int:
+        stmt = select(func.count()).select_from(enquiries)
+        if status:
+            stmt = stmt.where(enquiries.c.status == status)
+        if address_key:
+            stmt = stmt.where(enquiries.c.address_key == address_key)
+        if since:
+            stmt = stmt.where(enquiries.c.created_at >= since)
+        with self.engine.connect() as cx:
+            return cx.execute(stmt).scalar_one()
+
+    def delete_enquiries(self, statuses: tuple[str, ...], before: str) -> int:
+        with self.engine.begin() as cx:
+            gone = cx.execute(
+                delete(enquiries).where(enquiries.c.status.in_(statuses), enquiries.c.updated_at < before)
+            )
+        return gone.rowcount
 
     # --- agency dispatches ----------------------------------------------------
     def create_dispatch(self, **fields) -> str:

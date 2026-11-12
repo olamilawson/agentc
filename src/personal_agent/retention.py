@@ -97,8 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(
         prog="python -m personal_agent.retention", description=__doc__.split("\n\n")[0]
     ).parse_args(argv)
+    from personal_agent.engine import enquiries
+
     settings = load_settings()
-    report = apply_retention(Engine(settings, Database(settings.database_url)))
+    db = Database(settings.database_url)
+    report = apply_retention(Engine(settings, db))
+    gone = enquiries.forget_settled(db, settings.enquiries)
+    print(f"{gone} declined, cancelled or expired enquiries older than {settings.enquiries.keep_days} days deleted")
     if not report:
         print("no client has a retention period set; nothing was removed")
     for r in report:

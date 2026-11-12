@@ -36,7 +36,7 @@ from personal_agent.engine.sponsorship_triage import (
 from personal_agent.engine.strategy_drafting import build_drafting_graph, drafting_contracts, drafting_outputs
 from personal_agent.engine.think import build_think_graph, think_contracts, think_outputs
 from personal_agent.engine import dispatch as agency_dispatch
-from personal_agent.engine import bookings, signal_scan, skill_run
+from personal_agent.engine import bookings, enquiries, signal_scan, skill_run
 from personal_agent.engine import studio as studio_runs
 from personal_agent.graph_mail import GraphError, GraphMail, from_settings as graph_from_settings
 from personal_agent.gateway.tools import ToolClass, ToolGateway, ToolSpec, content_hash
@@ -332,6 +332,7 @@ WORKFLOWS: dict[str, Workflow] = {
     agency_dispatch.WORKFLOW: Workflow(
         agency_dispatch.build_dispatch_graph, agency_dispatch.dispatch_outputs, agency_dispatch.dispatch_rejected
     ),
+    enquiries.WORKFLOW: Workflow(enquiries.build_invite_graph, enquiries.invite_outputs),
 }
 
 

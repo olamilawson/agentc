@@ -40,9 +40,11 @@ def _sign_in(client: TestClient, email: str = EMAIL, password: str = PASSWORD, *
 
 
 def test_every_screen_and_endpoint_needs_a_session(client):
-    for path in ("/", "/queue", "/inspect", "/calendar", "/files", "/library", "/cost"):
+    for path in ("/queue", "/inspect", "/calendar", "/files", "/library", "/cost", "/enquiries"):
         page = client.get(path, headers={"accept": "text/html"})
         assert page.status_code == 303 and page.headers["location"].startswith("/login?next=")
+    # The site's own address shows a visitor the request page, which chidimma.com links to.
+    assert client.get("/", headers={"accept": "text/html"}).headers["location"] == "/enquire"
     for path in ("/runs", "/clients", "/costs", "/ledger", "/skills", "/calls", "/approvals/pending"):
         assert client.get(path).status_code == 401
     assert client.post("/runs", json={"workflow": "foundation-test", "client": "acme", "inputs": {}}).status_code == 401

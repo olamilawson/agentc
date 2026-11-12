@@ -72,6 +72,21 @@ class CreativeReviewSettings(BaseModel):
 from personal_agent.scheduling import CalendarPolicy  # noqa: E402
 
 
+class EnquiryPolicy(BaseModel):
+    """config/enquiries.yaml: the public request page and invite links."""
+    name: str = "Ijeoma Pro"
+    owner_full_name: str = "Chidimma Okoli"
+    privacy_url: str | None = None
+    terms_url: str | None = None
+    topics: list[str] = []
+    invite_days: int = 7
+    briefs_per_invite: int = 1
+    evaluations_per_month: int = 20
+    per_address_per_day: int = 3
+    waiting_cap: int = 100
+    keep_days: int = 180
+
+
 class Settings(BaseModel):
     database_url: str
     checkpoint_path: Path
@@ -98,6 +113,8 @@ class Settings(BaseModel):
     # The address whose calendar the agent reads for free time. None: the mailbox's own.
     graph_calendar: str | None = None
     calendar: CalendarPolicy = CalendarPolicy()
+    # Requests from outside and invite links (config/enquiries.yaml).
+    enquiries: EnquiryPolicy = EnquiryPolicy()
     # The owner's principles, sent with every model step and shown on the Core screen.
     core: CoreSettings = CoreSettings()
     # The workstreams created at the first start (config/workstreams.yaml).
@@ -165,6 +182,9 @@ def load_settings() -> Settings:
         model_catalogue=[ModelChoice(**m) for m in catalogue],
         dispatch_hold_minutes=int(env("PERSONAL_AGENT_DISPATCH_HOLD_MINUTES") or 15),
         connectors=from_yaml("PERSONAL_AGENT_CONNECTORS", "connectors.yaml"),
+        enquiries=EnquiryPolicy(**{
+            k: v for k, v in from_yaml("PERSONAL_AGENT_ENQUIRIES", "enquiries.yaml").items() if v is not None
+        }),
         public_url=env("PERSONAL_AGENT_PUBLIC_URL") or None,
         brand_name=env("PERSONAL_AGENT_NAME") or "Chidimma OS",
         owner_name=env("PERSONAL_AGENT_OWNER_NAME") or "Chidimma",

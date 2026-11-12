@@ -332,6 +332,8 @@ dialog.sheet:not(:modal) { position: static; width: auto; max-width: 768px; max-
 .sheet-body .linkrow { margin-bottom: -8px; }
 .sheet-body .read { margin: 0; min-height: 36px; font-size: 12px; }
 .sheet-body pre { margin-bottom: 0; }
+.said > * + * { margin-top: 6px; } .said p:not(.eyebrow) { margin-bottom: 0; } .said pre { margin-top: 6px; }
+.card.fit { max-width: 880px; }
 .context { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 16px; background: var(--well);
   border: 1px solid var(--line-strong); font-size: 13px; line-height: 1.6; }
 .context svg.i { width: 28px; height: 28px; padding: 6px; border-radius: 8px; background: var(--card); border: 1px solid var(--line-strong); color: var(--slate-ink); }
@@ -384,7 +386,7 @@ button:hover { background: var(--well); }
 .approve:hover { background: var(--btn-hover); }
 .reject { border-color: var(--rose-ink); color: var(--rose-ink); }
 .read { min-height: 44px; font-size: 13px; margin: 8px 0; }
-select, input[type="text"], input[type="email"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea {
+select, input[type="text"], input[type="email"], input[type="tel"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea {
   min-height: 44px; padding: 8px 12px; border: 1px solid var(--edge); border-radius: 12px; background: var(--card);
   color: var(--ink); font: 14px var(--sans); }
 textarea { width: 100%; line-height: 1.5; }
@@ -505,6 +507,10 @@ _ICONS = {
     "eye-off": '<path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.5 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
     "moon": '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
     "draft": '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13 7 4 4"/>',
+    "upload": '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>',
+    "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    "link": '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
 }
 
 
@@ -590,6 +596,7 @@ SCREENS = [
     ("intelligence", "/intelligence", "Intelligence", "intelligence"),
 ]
 FOOT = [
+    ("enquiries", "/enquiries", "Client enquiries", "mail"),
     ("library", "/library", "Memory &amp; decisions", "memory"),
     ("core", "/core", "Chidimma Core", "spark"),
     ("runs", "/inspect", "Runs", "runs"),
@@ -601,7 +608,7 @@ FOOT = [
 
 def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, signed_in: bool = False,
          script: str = "", refresh: int = 0, clients: list[str] | None = None, today: str = "",
-         dock: str = "", today_count: int = 0, up: str | None = None) -> str:
+         dock: str = "", today_count: int = 0, up: str | None = None, counts: dict | None = None) -> str:
     """One screen inside the shell. `waiting` is the number of items that need the
     owner's decision; `clients` are listed in the rail as workstreams; `dock` is
     the bar fixed to the bottom of the home screen."""
@@ -610,6 +617,8 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
         count = f'<span class="count" aria-label="{waiting} waiting">{waiting}</span>' if key == "queue" and waiting else ""
         if key == "today" and today_count:
             count = f'<span class="count quiet-count" aria-label="{today_count} today">{today_count}</span>'
+        if (counts or {}).get(key):
+            count = f'<span class="count" aria-label="{counts[key]} waiting">{counts[key]}</span>'
         return f'<a href="{href}"{current}>{icon(glyph)}<span class="grow">{label}</span>{count}</a>'
 
     streams = "".join(
@@ -694,3 +703,195 @@ def sign_in_page(brand: str, message: str = "", next_path: str = "/", with_code:
 
 def plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+# --- the public pages: the request form and a private brief link ------------------------------------
+# No rail and no session. The same tokens as the app, so the dark theme and contrast carry over;
+# the story panel keeps a fixed dark ground, so its light text holds 10:1 or better in both themes.
+PUBLIC_CSS = """
+body.public { min-height: 100vh; background: var(--canvas); }
+.public-wrap { display: grid; grid-template-columns: minmax(320px, 5fr) 7fr; min-height: 100vh; }
+.story { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; justify-content: space-between; gap: 32px;
+  padding: 40px 48px; color: #f8fafc; overflow: hidden; isolation: isolate;
+  background: radial-gradient(120% 80% at 100% 0%, #4c1d95 0%, rgba(76, 29, 149, 0) 60%),
+              linear-gradient(160deg, #0d1527 0%, #1e1b4b 55%, #2e1065 100%); }
+.story::after { content: ""; position: absolute; inset: auto -120px -160px auto; width: 420px; height: 420px; border-radius: 50%;
+  border: 56px solid rgba(221, 214, 254, .08); z-index: -1; }
+.wordmark { display: inline-flex; align-items: center; gap: 12px; color: #fff; text-decoration: none; font: 600 15px var(--sans);
+  letter-spacing: .06em; text-transform: uppercase; }
+.wordmark small { display: block; color: #cbd5e1; font: 500 11px var(--sans); letter-spacing: .08em; }
+.wordmark .mark { width: 40px; height: 40px; border-radius: 11px; background: linear-gradient(135deg, #6366f1, #7e22ce); display: flex;
+  align-items: center; justify-content: center; box-shadow: 0 6px 20px rgba(99, 102, 241, .35); }
+.story .eyebrow { color: #c4b5fd; font-size: 11px; }
+.story h1 { color: #fff; font: 400 44px/1.08 var(--serif); letter-spacing: -.02em; margin: 0 0 16px; }
+.story .lede { color: #cbd5e1; font-size: 16px; line-height: 1.6; margin: 0; max-width: 42ch; }
+.journey { list-style: none; margin: 32px 0 0; padding: 0; display: grid; gap: 4px; counter-reset: step; }
+.journey li { counter-increment: step; display: grid; grid-template-columns: 32px 1fr; gap: 14px; padding: 12px 0; color: #cbd5e1;
+  font-size: 14px; line-height: 1.5; }
+.journey li::before { content: counter(step); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font: 600 13px var(--sans); color: #fff; border: 1px solid rgba(196, 181, 253, .45); background: rgba(124, 58, 237, .25); }
+.journey li[data-state="done"]::before { content: "\\2713"; background: #7c3aed; border-color: #7c3aed; }
+.journey li[data-state="current"] { color: #fff; }
+.journey li[data-state="current"]::before { background: #fff; color: #4c1d95; border-color: #fff; }
+.journey b { display: block; color: #fff; font-weight: 600; }
+.journey small { font-size: 14px; }
+.story-foot { color: #cbd5e1; font-size: 12px; line-height: 1.6; margin: 0; max-width: 46ch; }
+.story-foot a { color: #e9d5ff; }
+
+.panel { display: flex; justify-content: center; padding: 56px 48px 72px; }
+.panel-inner { width: 100%; max-width: 620px; }
+.panel h2 { margin: 0 0 4px; font: 500 26px/1.25 var(--serif); }
+.panel .intro { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
+.notice { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--line-strong); background: var(--card);
+  border-radius: 14px; padding: 14px 16px; margin: 0 0 24px; color: var(--text); font-size: 14px; }
+.notice svg.i { margin-top: 2px; color: var(--purple-ink); }
+.notice.stop { border-color: var(--rose-ink); background: var(--rose-tint); color: var(--rose-ink); }
+.notice.stop svg.i { color: var(--rose-ink); }
+
+.pform { display: block; margin: 0; }
+.pform .group { background: var(--card); border: 1px solid var(--line-strong); border-radius: 18px; padding: 24px; margin: 0 0 20px;
+  box-shadow: var(--shadow); }
+.pform .group > .eyebrow { margin: 0 0 16px; color: var(--purple-ink); }
+.pform .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 16px; }
+.pform .grid .wide { grid-column: 1 / -1; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field > label { font-weight: 600; font-size: 13px; color: var(--ink); }
+.field .req { color: var(--rose-ink); margin-left: 2px; }
+.field .hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+.field input, .field textarea, .field select { width: 100%; transition: border-color .15s ease-out, box-shadow .15s ease-out; }
+.field input:focus, .field textarea:focus, .field select:focus { outline: none; border-color: var(--purple); box-shadow: 0 0 0 3px var(--purple-line); }
+.field [aria-invalid="true"] { border-color: var(--rose-ink); box-shadow: 0 0 0 3px var(--rose-tint); }
+.field-error { margin: 0; color: var(--rose-ink); font-size: 12px; font-weight: 600; }
+.field-error:empty { display: none; }
+.counter { align-self: flex-end; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.counter[data-state="near"] { color: var(--amber-ink); }
+.choices { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.choices legend { font-weight: 600; font-size: 13px; color: var(--ink); padding: 0; margin-bottom: 10px; }
+.choice { position: relative; }
+.choice input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.choice span { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--well); color: var(--text); font-size: 13px; font-weight: 500;
+  transition: background-color .15s ease-out, border-color .15s ease-out, color .15s ease-out; }
+.choice span svg.i { width: 14px; height: 14px; display: none; }
+.choice input:hover + span { border-color: var(--purple-edge); }
+.choice input:checked + span { background: var(--purple-tint); border-color: var(--purple); color: var(--purple-ink); font-weight: 600; }
+.choice input:checked + span svg.i { display: block; }
+.choice input:focus-visible + span { outline: 2px solid var(--purple); outline-offset: 2px; }
+.consent { display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: start; padding: 12px 0; font-size: 13px;
+  line-height: 1.55; color: var(--text); cursor: pointer; }
+.consent ~ .consent { border-top: 1px solid var(--line); }
+.consent + .field-error { margin: -4px 0 8px 34px; }
+.consent input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: #7c3aed; }
+.consent b { color: var(--ink); }
+.consent .optional { display: inline-block; margin-left: 6px; color: var(--muted); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em; }
+.trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.submit-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-top: 8px; }
+.submit-row .meta { margin: 0; }
+.pform button.approve, .pform .button { min-height: 48px; padding: 0 22px; border-radius: 14px; display: inline-flex; align-items: center;
+  justify-content: center; gap: 10px; font-size: 15px; }
+.pform button.approve svg.i { transition: transform .15s ease-out; }
+.pform button.approve:hover svg.i { transform: translateX(3px); }
+.spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; display: none; }
+.pform[data-state="sending"] .spinner { display: block; animation: spin .8s linear infinite; }
+.pform[data-state="sending"] button.approve svg.i { display: none; }
+.pform[data-state="sending"] button.approve { opacity: .85; cursor: progress; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.after { margin: 20px 0 0; color: var(--muted); font-size: 13px; }
+.after a { font-weight: 600; }
+
+/* The two steps of a brief. Without scripts both show, one after the other. */
+.stepper { display: flex; gap: 8px; list-style: none; padding: 0; margin: 0 0 24px; }
+.stepper li { flex: 1; display: flex; flex-direction: column; gap: 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.stepper li::before { content: ""; height: 4px; border-radius: 999px; background: var(--line-strong); transition: background-color .3s ease-out; }
+.stepper li[data-state="current"], .stepper li[data-state="done"] { color: var(--ink); }
+.stepper li[data-state="current"]::before, .stepper li[data-state="done"]::before { background: linear-gradient(90deg, #6366f1, #7e22ce); }
+.js .step[hidden] { display: none; }
+.step-nav { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-top: 8px; }
+.pform .gap-top { margin-top: 20px; }
+.drop { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 28px 16px;
+  border: 1.5px dashed var(--edge); border-radius: 16px; background: var(--well); color: var(--muted); font-size: 13px; cursor: pointer;
+  transition: border-color .15s ease-out, background-color .15s ease-out; }
+.drop svg.i { width: 24px; height: 24px; color: var(--purple-ink); }
+.drop b { color: var(--ink); font-size: 14px; }
+.drop:focus-within { outline: 2px solid var(--purple); outline-offset: 2px; }
+.drop[data-state="over"] { border-color: var(--purple); background: var(--purple-tint); }
+.drop input[type="file"] { max-width: 100%; }
+.js .drop input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.files { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.files li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 14px; border: 1px solid var(--line-strong);
+  border-radius: 12px; background: var(--card); font-size: 13px; color: var(--ink); }
+.files li small { color: var(--muted); margin-left: 8px; }
+.files li button { min-height: 36px; min-width: 36px; padding: 0; border: 0; box-shadow: none; background: none; color: var(--muted);
+  display: flex; align-items: center; justify-content: center; }
+.files li button:hover { color: var(--rose-ink); background: var(--rose-tint); }
+.summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 24px; margin: 0; }
+.summary div { padding: 8px 0; }
+.summary dt { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.summary dd { margin: 2px 0 0; color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+
+/* The page after sending, and a link that no longer opens a form. */
+.outcome { text-align: left; padding: 8px 0; }
+.outcome .seal { width: 64px; height: 64px; border-radius: 20px; display: flex; align-items: center; justify-content: center; margin: 0 0 24px;
+  background: var(--emerald-tint); color: var(--emerald-ink); border: 1px solid var(--chip-emerald); }
+.outcome .seal svg.i { width: 30px; height: 30px; stroke-width: 2.5; }
+.outcome .seal.wait { background: var(--amber-tint); color: var(--amber-ink); border-color: var(--chip-amber); }
+.outcome h2 { font-size: 32px; margin-bottom: 12px; }
+.outcome p { font-size: 15px; line-height: 1.65; max-width: 52ch; }
+.outcome .next { list-style: none; padding: 0; margin: 24px 0; display: grid; gap: 12px; }
+.outcome .next li { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 14px; padding: 14px 16px; font-size: 14px; }
+.outcome .next svg.i { color: var(--purple-ink); margin-top: 2px; }
+.public-foot { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line-strong); color: var(--muted); font-size: 12px;
+  display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; }
+.public-foot a { color: var(--muted); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .panel-inner { animation: rise .5s cubic-bezier(.2, .7, .2, 1) both; }
+  .story-body { animation: rise .6s .05s cubic-bezier(.2, .7, .2, 1) both; }
+  .step:not([hidden]) { animation: rise .35s cubic-bezier(.2, .7, .2, 1) both; }
+  .outcome .seal { animation: pop .5s .1s cubic-bezier(.2, 1.4, .4, 1) both; }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 960px) {
+  .public-wrap { grid-template-columns: 1fr; }
+  .story { position: relative; height: auto; padding: 24px 16px 28px; gap: 20px; }  /* relative: the ring stays inside */
+  .story h1 { font-size: 32px; }
+  .story .lede { font-size: 15px; }
+  .journey { margin-top: 16px; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .journey li { grid-template-columns: 1fr; gap: 6px; padding: 0; font-size: 12px; }
+  .journey li::before { width: 26px; height: 26px; font-size: 12px; }
+  .journey small { display: none; }  /* on a phone the steps show as a row of titles, so the form comes sooner */
+  .story-foot { display: none; }
+  .panel { padding: 24px 16px 48px; }
+  .pform .group { padding: 18px 16px; }
+  .pform .grid, .summary { grid-template-columns: 1fr; }
+  .pform button.approve, .pform .button { width: 100%; }
+  .submit-row, .step-nav { flex-direction: column-reverse; align-items: stretch; }
+  .choice span { min-height: 44px; }
+  .public-foot a { display: inline-flex; align-items: center; min-height: 44px; }
+}
+"""
+
+
+def public_page(title: str, body: str, *, story: str, script: str = "", private: bool = False) -> str:
+    """A page for someone outside: no rail, no session. `story` fills the panel beside the form.
+    private: the page's address holds a secret, so no link on it may send that address elsewhere."""
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="robots" content="noindex, nofollow"/>
+{'<meta name="referrer" content="no-referrer"/>' if private else '<meta name="referrer" content="strict-origin-when-cross-origin"/>'}
+<title>{escape(title)}</title>
+{ICON_LINKS}
+<style>{CSS}{PUBLIC_CSS}</style>{THEME_HEAD}
+<script>document.documentElement.classList.add('js')</script></head>
+<body class="public">
+<div class="public-wrap">
+  <aside class="story">{story}</aside>
+  <main class="panel"><div class="panel-inner">{body}</div></main>
+</div>
+{script}
+</body></html>"""

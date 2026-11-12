@@ -1,0 +1,36 @@
+# Requests from outside, and the private links that let a person send a brief.
+# The public request page calls no model, so a request costs nothing. Only a
+# brief sent through a live invite link starts an evaluation.
+
+# The name the public pages carry, and whose network a person asks to join.
+name: Ijeoma Pro
+owner_full_name: Chidimma Okoli
+
+# Linked from the consent box. With no terms page, the box names the privacy policy alone.
+privacy_url: https://chidimma.com/privacy/
+terms_url:
+
+# What a person can say they need help with. A link from chidimma.com can choose
+# one with ?topic=<its position, from 1>, for example /enquire?topic=2.
+topics:
+  - Brand strategy and growth
+  - Marketing and creative thinking
+  - Communications and reputation
+  - Business and strategy
+  - Research and critical thinking
+
+# An invite link, unless the owner sets otherwise when she makes it.
+invite_days: 7
+briefs_per_invite: 1
+
+# Outside briefs the agent evaluates by itself in a calendar month. Past this,
+# a brief is kept and waits for the owner to start its evaluation by hand.
+evaluations_per_month: 20
+
+# Requests from one network address in 24 hours, and requests waiting for the
+# owner's decision at once. Past either, the page refuses new requests.
+per_address_per_day: 3
+waiting_cap: 100
+
+# Declined, cancelled and expired requests are deleted after this many days.
+keep_days: 180

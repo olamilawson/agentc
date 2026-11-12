@@ -108,6 +108,15 @@ this repository implements **Delivery phase 1: Foundation**.
   regulation, opportunity, or not relevant) with a line of why; with no model
   the headlines still arrive, unsorted. Feed text is outside material and
   travels as marked data. Nothing joins the watchlist until the owner adds it.
+- **Client enquiries** — `engine/enquiries.py`, `api/enquiries.py`. A public
+  request page (`/enquire`, where the site's own address sends a visitor) asks
+  for a person's details, the work and their consent, and calls no model.
+  The owner decides on the Client enquiries screen: a private link lets the
+  person send a brief (`/brief/<secret>`), which is saved to the workstream's
+  folder and evaluated, up to `evaluations_per_month` a month; past that it
+  waits for the owner. Mailing the link waits for approval like any send.
+  Limits and wording live in `config/enquiries.yaml`; the states are in
+  `docs/STATE-MACHINES.md`.
 - **Web search** — `engine/web.py`, through Exa (`connectors.py`). When the
   owner ticks "Search the web first" on Think or on a skill, the agent searches
   with the question or request, reads the top five pages, and cites each page
