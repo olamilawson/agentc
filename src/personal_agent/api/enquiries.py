@@ -201,12 +201,10 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         return (f'{wordmark()}<div class="story-body"><p class="eyebrow">{escape(eyebrow)}</p><h1>{escape(title)}</h1>'
                 f'<p class="lede">{escape(lede)}</p>{steps}</div><p class="story-foot">{foot}</p>')
 
-    def foot(private: bool = False) -> str:
-        """private: a page whose address holds a link's secret carries no sign-in link."""
+    def foot() -> str:
+        # No sign-in link: visitors have no account here, and the owner signs in at /login directly.
         links = [f'<a href="{escape(url)}">{label}</a>'
                  for url, label in ((policy.privacy_url, "Privacy Policy"), (policy.terms_url, "Terms of Use")) if url]
-        if not private:
-            links.append('<a href="/login">Owner sign-in</a>')
         return (f'<footer class="public-foot"><span>{escape(policy.name)} is an AI agent that works alongside '
                 f'{escape(policy.owner_full_name)}.</span><span>{" · ".join(links)}</span></footer>')
 
@@ -397,7 +395,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         }[state]
         body = (f'<div class="outcome" data-state="{state}"><div class="seal{"" if state == "briefed" else " wait"}">'
                 f'{icon("check" if state == "briefed" else "link")}</div><h2>{escape(words[0])}</h2><p>{escape(words[1])}</p>'
-                f'{"" if state == "briefed" else '<a class="button approve" href="/enquire">Request access</a>'}</div>{foot(True)}')
+                f'{"" if state == "briefed" else '<a class="button approve" href="/enquire">Request access</a>'}</div>{foot()}')
         return HTMLResponse(ui.public_page(
             f"Private brief · {policy.name}", body, private=True,
             story=story(f"{policy.name} · Private brief", "Share your brief.", "A private link from Chidimma.", "",
@@ -448,7 +446,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
   </div>
   {trap()}
 </form>
-{foot(True)}"""
+{foot()}"""
         return HTMLResponse(ui.public_page(f"Share your brief · {policy.name}", body, story=brief_story(e, step - 1),
                                            script=FORM_SCRIPT, private=True), status_code=status)
 
@@ -515,7 +513,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
     {f'<li>{icon("link")}<span>This link accepts {e["briefs_left"]} more brief{"s" if e["briefs_left"] != 1 else ""} until {escape(day(e["expires_at"]))}. <a href="/brief/{escape(token)}">Send another brief</a></span></li>' if more else ""}
   </ul>
 </div>
-{foot(True)}"""
+{foot()}"""
         return ui.public_page(f"Brief sent · {policy.name}", body, story=brief_story(e, 2), private=True)
 
     # --- the owner's screen -------------------------------------------------------------------------

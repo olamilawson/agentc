@@ -68,6 +68,7 @@ def test_a_visitor_sees_the_request_page_and_nothing_private(client):
     assert 'value="Communications and reputation" checked' in page.text  # chidimma.com can pick the topic
     assert 'href="https://chidimma.example/privacy/"' in page.text and "Terms of Use" not in page.text  # no terms page yet
     assert 'data-state="open"' in page.text and 'name="website"' in page.text  # the hidden field for programs
+    assert "/login" not in page.text and "sign-in" not in page.text.lower()  # visitors see no way into the owner's space
     assert client.get("/enquiries", headers={"accept": "text/html"}).headers["location"].startswith("/login")
 
 
