@@ -11,6 +11,16 @@ returns the work to scoring, twice at most; after that the draft goes to the
 owner with the open faults listed above it. Nothing is filed to the client
 folder until the owner approves the exact content.
 
+A brief sent through a private link (inputs carry reply_to) also gets its reply:
+
+    verify evidence -> draft reply (model, standard) -> owner approval of one card
+        -> file assessment -> send reply (release)
+
+The card's body is the reply, which the owner can edit; the assessment rides
+beside it. Approving the card is the owner's approval of that exact reply, so
+the send records an approval for the mail itself, derived from hers, and the
+gateway's rule (an approval for the exact content) still holds.
+
 The rubric lives in skills/brief-evaluation/SKILL.md, never here.
 """
 
@@ -20,12 +30,13 @@ import json
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field, model_validator
 
 from personal_agent.engine import steps
 from personal_agent.engine.approval import make_approval_node
 from personal_agent.engine.graph import ROLE
-from personal_agent.gateway.tools import content_hash
+from personal_agent.gateway.tools import ApprovalLapsed, ApprovalRequired, UncertainOutcome, content_hash
 from personal_agent.harness.context import build_context
 from personal_agent.harness.contract import StepContract, StepFailed
 
@@ -149,6 +160,21 @@ class VerifyOut(BaseModel):
         return self
 
 
+class ReplyIn(BaseModel):
+    first_name: str
+    project: str
+    owner: str
+    decision: Decision
+    decision_reason: str
+    questions: list[str] = []
+    booking_url: str | None = None
+
+
+class ReplyOut(BaseModel):
+    subject: str = Field(min_length=1, max_length=160)
+    body: str = Field(min_length=1, max_length=4000)
+
+
 class FileIn(BaseModel):
     subject: str
     body: str
@@ -223,6 +249,22 @@ def brief_contracts() -> dict[str, StepContract]:
                 "(or from the stated absence or context) under the rubric's anchors. Give one "
                 "verdict per criterion; when a score does not follow, say why in one line.",
                 VerifyOut,
+            ),
+        ),
+        "draft_brief_reply": StepContract(
+            node="draft_brief_reply",
+            tier="standard",
+            input_schema=ReplyIn,
+            output_schema=ReplyOut,
+            instruction=_instruction(
+                "Write the email the owner sends back to the person who sent this brief, in the owner's own first "
+                "person, signed with the owner's name. Keep it short, warm and plain. Thank them for the brief by its "
+                "project name. Then follow the decision: pursue, say the work interests the owner and invite them to a "
+                "call, giving the booking link if there is one; ask_for_detail, ask the questions given, numbered; "
+                "decline, decline courteously, with no scores and no criticism; escalate, say the owner is reviewing "
+                "it and will come back to them. Never mention scores, a rubric, an assessment or a model. Never promise "
+                "a date, a price or terms the inputs do not give. Use no em dashes.",
+                ReplyOut,
             ),
         ),
         "file_assessment": StepContract(
@@ -316,6 +358,28 @@ def assessment_payload(state: dict) -> dict:
     }
 
 
+def card_payload(state: dict) -> dict:
+    """The one card the owner approves for a brief that came through a private link: the reply to send,
+    which she may edit, with the assessment beside it."""
+    to = state["inputs"]["reply_to"]
+    return {
+        "subject": f"Reply to {to['first_name']}: {to['project']}",
+        "to": to["email"],
+        "reply_subject": state["reply_subject"],
+        "body": state["reply_body"],
+        "assessment": assessment_payload(state)["body"],
+    }
+
+
+def approval_content(state: dict) -> dict:
+    return card_payload(state) if state.get("reply_body") else assessment_payload(state)
+
+
+def reply_mail(state: dict) -> dict:
+    return {"client": state["client"], "to": state["inputs"]["reply_to"]["email"],
+            "subject": state["reply_subject"], "body": state["reply_body"]}
+
+
 def brief_outputs(state: dict) -> dict | None:
     """Run-record outputs; partial work is kept when a run stops early."""
     if not state.get("record"):
@@ -331,6 +395,9 @@ def brief_outputs(state: dict) -> dict | None:
         "faults": state.get("faults", []),
         "filed": state.get("filed"),
     }
+    if state.get("reply_body"):
+        out["reply"] = {"to": state["inputs"]["reply_to"]["email"], "subject": state["reply_subject"],
+                        "body": state["reply_body"], **(state.get("reply_result") or {})}
     if state.get("note"):
         out.update(assessment_payload(state))
     return out
@@ -358,6 +425,9 @@ class BriefState(TypedDict, total=False):
     approval_error: str | None
     approved_hash: str
     filed: dict
+    reply_subject: str
+    reply_body: str
+    reply_result: dict
     error: str | None
 
 
@@ -459,16 +529,68 @@ def build_brief_graph(h):
     def after_verify(state: BriefState) -> str:
         if state["faults"] and state["verify_returns"] <= MAX_VERIFY_RETURNS:
             return "score_by_rubric"
-        return "approval"  # clean, or the limit is reached and the faults go to the owner
+        # Clean, or the limit is reached and the faults go to the owner.
+        return "draft_reply" if (state.get("inputs") or {}).get("reply_to") else "approval"
 
     approval = make_approval_node(h.db, assessment_payload)
+
+    def draft_reply(state: BriefState) -> dict:
+        to = state["inputs"]["reply_to"]
+        # The brief itself is not sent to this step: the reply is built from the decision and the questions.
+        out, usage = steps.run_model(h, "draft_brief_reply", state, {
+            "first_name": to["first_name"], "project": to["project"], "owner": to["owner"],
+            "decision": state["decision"], "decision_reason": state["decision_reason"],
+            "questions": state.get("questions", []), "booking_url": to.get("booking_url"),
+        }, "", [])
+        return {"reply_subject": out["subject"], "reply_body": out["body"], **usage}
+
+    def reply_approval(state: BriefState) -> dict:
+        """One pause for the owner: approve the card, edit the reply then approve, or reject."""
+        payload = card_payload(state)
+        to = state["inputs"]["reply_to"]
+        notes = [f"Approving files the assessment to the {state['client']} folder and sends this reply to {to['email']}.",
+                 f"Recommendation: {_DECISION_LABELS[state['decision']]}. {state['decision_reason']}"]
+        notes += [f"Open fault: {fault}" for fault in state.get("faults", [])]
+        resume = interrupt({
+            "type": "approval", "content": payload, "content_hash": content_hash(payload),
+            "error": state.get("approval_error"), "action": "brief_reply", "stage": "reply", "editable": True,
+            "notes": notes + list(state.get("flags", [])),
+        })
+        rec = h.db.get_approval(resume["approval_id"])
+        edited = resume.get("edited_body")
+        approved = {**payload, "body": edited} if edited is not None else payload
+        if rec and not rec["lapsed"] and rec["decision"] == "approved" and rec["content_hash"] == content_hash(approved):
+            return {"approved_hash": rec["content_hash"], "approval_error": None,
+                    **({"reply_body": edited} if edited is not None else {})}
+        if rec:
+            h.db.lapse_approval(rec["id"])
+            h.db.audit(state["run_id"], "approval_lapsed", {
+                "approval_id": rec["id"], "note": "content no longer matches the approved hash; owner must approve again",
+            })
+        return {"approval_error": "approval does not match the current content; approve again"}
+
+    def send_reply(state: BriefState) -> dict:
+        if content_hash(card_payload(state)) != state.get("approved_hash"):
+            return {"approval_error": "content changed after approval; approve again"}
+        mail = reply_mail(state)
+        # The owner approved this exact reply inside the card; the mail's own approval is derived from hers.
+        h.db.record_approval(state["run_id"], content_hash(mail), "approved",
+                             f"Part of the brief card approved as {state['approved_hash'][:12]}")
+        try:
+            result = h.tools.call(state["run_id"], "send_reply", ["send_mail"], "send_mail", mail)
+        except (ApprovalRequired, ApprovalLapsed) as e:
+            return {"approval_error": str(e)}
+        except UncertainOutcome as e:  # never retried: it may have gone
+            return {"reply_result": {"sent": None, "note": str(e)}, "approval_error": None}
+        return {"reply_result": {"sent": bool(result.get("sent")), "note": result.get("note")},
+                "approval_error": None, "error": None}
 
     def after_approval(state: BriefState) -> str:
         return "approval" if state.get("approval_error") else "file_assessment"
 
     def file_assessment(state: BriefState) -> dict:
         payload = h.contracts["file_assessment"].validate_input(assessment_payload(state))
-        if content_hash(payload) != state.get("approved_hash"):
+        if content_hash(approval_content(state)) != state.get("approved_hash"):
             return {"approval_error": "content changed after approval; approve again"}
         filed = h.tools.call(
             state["run_id"],
@@ -484,7 +606,9 @@ def build_brief_graph(h):
         return {"filed": filed, "approval_error": None, "error": None}
 
     def after_file(state: BriefState) -> str:
-        return "approval" if state.get("approval_error") else END
+        if state.get("approval_error"):
+            return "reply_approval" if state.get("reply_body") else "approval"
+        return "send_reply" if state.get("reply_body") else END
 
     builder = StateGraph(BriefState)
     builder.add_node("receive_brief", receive_brief)
@@ -495,6 +619,9 @@ def build_brief_graph(h):
     builder.add_node("verify_evidence", verify_evidence)
     builder.add_node("approval", approval)
     builder.add_node("file_assessment", file_assessment)
+    builder.add_node("draft_reply", draft_reply)
+    builder.add_node("reply_approval", reply_approval)
+    builder.add_node("send_reply", send_reply)
     builder.add_edge(START, "receive_brief")
     builder.add_edge("receive_brief", "extract_fields")
     builder.add_edge("extract_fields", "check_gaps")
@@ -502,10 +629,21 @@ def build_brief_graph(h):
     builder.add_edge("score_by_rubric", "draft_assessment")
     builder.add_edge("draft_assessment", "verify_evidence")
     builder.add_conditional_edges(
-        "verify_evidence", after_verify, {"score_by_rubric": "score_by_rubric", "approval": "approval"}
+        "verify_evidence", after_verify,
+        {"score_by_rubric": "score_by_rubric", "approval": "approval", "draft_reply": "draft_reply"},
+    )
+    builder.add_edge("draft_reply", "reply_approval")
+    builder.add_conditional_edges(
+        "reply_approval", lambda s: "reply_approval" if s.get("approval_error") else "file_assessment",
+        {"reply_approval": "reply_approval", "file_assessment": "file_assessment"},
+    )
+    builder.add_conditional_edges(
+        "send_reply", lambda s: "reply_approval" if s.get("approval_error") else END,
+        {"reply_approval": "reply_approval", END: END},
     )
     builder.add_conditional_edges(
         "approval", after_approval, {"approval": "approval", "file_assessment": "file_assessment"}
     )
-    builder.add_conditional_edges("file_assessment", after_file, {"approval": "approval", END: END})
+    builder.add_conditional_edges("file_assessment", after_file,
+                                  {"approval": "approval", "reply_approval": "reply_approval", "send_reply": "send_reply", END: END})
     return builder

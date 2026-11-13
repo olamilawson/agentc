@@ -313,6 +313,30 @@ enquiries = Table(
     Column("created_at", String),
 )
 
+# What the agent made of a request from the public page, judged against the
+# owner's written rules. One row per enquiry; acted says what was done about it.
+enquiry_screenings = Table(
+    "enquiry_screenings",
+    metadata,
+    Column("enquiry_id", String, primary_key=True),
+    Column("run_id", String),
+    Column("decision", String),  # invite | decline | ask
+    Column("reason", String),
+    Column("workstream", String),
+    Column("acted", String),  # invited | declined | waiting: what followed, by the owner's settings
+    Column("created_at", String),
+)
+
+# Settings the owner changes on a screen, kept as one JSON value per key:
+# her rules for requests, and the email templates she has approved to send on their own.
+owner_settings = Table(
+    "owner_settings",
+    metadata,
+    Column("key", String, primary_key=True),
+    Column("value", JSON),
+    Column("updated_at", String),
+)
+
 # The owner's choice of model for a tier, made on the Settings screen. A row
 # replaces that tier's line in config/route_table.yaml; no row leaves the file's.
 model_routes = Table(
@@ -472,7 +496,8 @@ class Database:
             return [dict(r) for r in cx.execute(stmt).mappings()]
 
     # --- approvals -----------------------------------------------------------
-    def record_approval(self, run_id: str, content_hash: str, decision: str, comment: str | None) -> str:
+    def record_approval(self, run_id: str, content_hash: str, decision: str, comment: str | None,
+                        decided_by: str = "owner") -> str:
         approval_id = new_id()
         with self.engine.begin() as cx:
             cx.execute(
@@ -482,7 +507,7 @@ class Database:
                     content_hash=content_hash,
                     decision=decision,
                     comment=comment,
-                    decided_by="owner",
+                    decided_by=decided_by,
                     lapsed=False,
                     created_at=now(),
                 )
@@ -695,6 +720,33 @@ class Database:
                 delete(enquiries).where(enquiries.c.status.in_(statuses), enquiries.c.updated_at < before)
             )
         return gone.rowcount
+
+    # --- owner settings and request screening ------------------------------------
+    def get_setting(self, key: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(select(owner_settings.c.value).where(owner_settings.c.key == key)).first()
+        return row[0] if row else None
+
+    def set_setting(self, key: str, value: dict) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(owner_settings).where(owner_settings.c.key == key))
+            cx.execute(insert(owner_settings).values(key=key, value=value, updated_at=now()))
+
+    def save_screening(self, enquiry_id: str, **fields) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(enquiry_screenings).where(enquiry_screenings.c.enquiry_id == enquiry_id))
+            cx.execute(insert(enquiry_screenings).values(enquiry_id=enquiry_id, created_at=now(), **fields))
+
+    def get_screening(self, enquiry_id: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(select(enquiry_screenings).where(enquiry_screenings.c.enquiry_id == enquiry_id)).mappings().first()
+        return dict(row) if row else None
+
+    def count_screenings(self, since: str) -> int:
+        with self.engine.connect() as cx:
+            return cx.execute(
+                select(func.count()).select_from(enquiry_screenings).where(enquiry_screenings.c.created_at >= since)
+            ).scalar_one()
 
     # --- agency dispatches ----------------------------------------------------
     def create_dispatch(self, **fields) -> str:

@@ -13,7 +13,10 @@ this repository implements **Delivery phase 1: Foundation**.
   prompt/skill-library versions, token and cost totals, outputs, flags.
 - **Approval gate** — the queue is the only route to a release action. An
   approval matches the exact content by hash; changed content lapses the
-  approval. Release calls carry idempotency keys; uncertain outcomes are never
+  approval. One exception, chosen by the owner: an email built word for word
+  from a template she has approved (the invite link, the decline note) is
+  approved on that standing approval, recorded as `standing:<template>`, capped
+  per day, and stops the moment she edits the template or turns it off. Release calls carry idempotency keys; uncertain outcomes are never
   retried, they are marked for the owner.
 - **Harness** — per-node step contract (input/output schemas, model tier,
   allowed tools, limits), retry-once-then-fail, per-run ceilings for tokens,
@@ -115,6 +118,11 @@ this repository implements **Delivery phase 1: Foundation**.
   person send a brief (`/brief/<secret>`), which is saved to the workstream's
   folder and evaluated, up to `evaluations_per_month` a month; past that it
   waits for the owner. Mailing the link waits for approval like any send.
+  With the owner's rules written on that screen, a cheap model step screens
+  each new request (invite, decline, ask) and, if she allows it, carries out
+  the clear ones. A brief from a private link arrives in Review as one card:
+  the drafted reply (editable) with the assessment beside it; approving files
+  the assessment and sends the reply.
   Limits and wording live in `config/enquiries.yaml`; the states are in
   `docs/STATE-MACHINES.md`.
 - **Web search** — `engine/web.py`, through Exa (`connectors.py`). When the

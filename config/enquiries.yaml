@@ -34,3 +34,15 @@ waiting_cap: 100
 
 # Declined, cancelled and expired requests are deleted after this many days.
 keep_days: 180
+
+# Chidimma's Cal.com booking page. The reply to a brief she wants to pursue offers it.
+booking_url:
+
+# With her rules written on the Client enquiries screen, the agent screens each
+# new request with one cheap model call, up to this many a day; past that,
+# requests wait for her.
+screens_per_day: 50
+
+# Template emails (the invite link, the decline note) she has approved to send on
+# their own: at most this many a day. Past it, they wait in Review.
+standing_sends_per_day: 30

@@ -333,6 +333,7 @@ WORKFLOWS: dict[str, Workflow] = {
         agency_dispatch.build_dispatch_graph, agency_dispatch.dispatch_outputs, agency_dispatch.dispatch_rejected
     ),
     enquiries.WORKFLOW: Workflow(enquiries.build_invite_graph, enquiries.invite_outputs),
+    enquiries.SCREEN: Workflow(enquiries.build_screen_graph, enquiries.screen_outputs),
 }
 
 
@@ -398,7 +399,7 @@ class Engine:
             contracts={
                 **default_contracts(), **brief_contracts(), **sponsorship_contracts(), **creative_contracts(),
                 **drafting_contracts(), **call_change_contracts(), **think_contracts(),
-                **skill_run.skill_contracts(), **signal_scan.scan_contracts(),
+                **skill_run.skill_contracts(), **signal_scan.scan_contracts(), **enquiries.screen_contracts(),
             },
             skill_text=skills.get("foundation-test", ""),
             skills=skills,
@@ -475,7 +476,9 @@ class Engine:
         run = self.db.get_run(run_id)
         self._invoke(run_id, None, {"run_id": run_id, "client": run["client"], "inputs": run["inputs"]})
 
-    def approve(self, run_id: str, decision: str, comment: str | None, edited_body: str | None = None) -> dict:
+    def approve(self, run_id: str, decision: str, comment: str | None, edited_body: str | None = None,
+                decided_by: str = "owner") -> dict:
+        """decided_by: "owner", or "standing:<template>" when a template the owner approved once sends itself."""
         run = self.db.get_run(run_id)
         if not run:
             raise KeyError(run_id)
@@ -496,9 +499,10 @@ class Engine:
             else:
                 approved_hash = content_hash({**pending["content"], "body": edited_body})
                 self.db.record_owner_edit(run_id, run["workflow"], pending.get("stage"), before, edited_body)
-        approval_id = self.db.record_approval(run_id, approved_hash, decision, comment)
+        approval_id = self.db.record_approval(run_id, approved_hash, decision, comment, decided_by)
         self.db.audit(run_id, "approval_recorded", {
             "decision": decision, "content_hash": approved_hash, "edited": edited_body is not None,
+            "decided_by": decided_by,
         })
 
         if decision == "approved":

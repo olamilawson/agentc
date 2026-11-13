@@ -35,6 +35,25 @@ outcome block carries `data-state`). The audit log records `enquiry_received`,
 `enquiry_invited`, `enquiry_declined`, `enquiry_link_cancelled`,
 `enquiry_link_expired`, `enquiry_brief_received` and `enquiries_forgotten`.
 
+### Screening a request
+
+Table `enquiry_screenings`, one row per enquiry, written by
+`screen_request()` in `engine/enquiries.py` after the `enquiry-screen` run.
+`decision` is `invite | decline | ask`; `acted` is `invited | declined |
+waiting`, by the owner's "decide clear cases" setting. No row: not screened
+(no rules written, the daily limit, or the monthly cap; the audit log says
+which). A request with instruction-like text is never invited automatically.
+Observe: the verdict chip on `/enquiries` and the evaluation panel on
+`/enquiries/{id}` (`data-state` = the decision).
+
+### A template email
+
+Setting `template:<kind>` in `owner_settings`. State, computed by
+`template()`: `standing` (approved and on, and the words still hash to what
+she approved), `changed` (approved once, words differ), `off`. Only `standing`
+sends without asking; each such send records `standing_approval_used`. The
+form carries `data-state`.
+
 ### A brief inside an enquiry
 
 Each entry in `enquiries.briefs` has a `run_id`. `None` means the brief came in

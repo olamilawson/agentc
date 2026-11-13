@@ -1983,8 +1983,10 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
                 "dispatch": ("Approve and dispatch to the agency",
                              "Approve it and the agent sends this mail to the agency once the hold ends. Until then you can recall it."),
                 "halt": ("Approve and send this halt notice", "Approve it and the agent sends this notice to the agency at once."),
+                "brief_reply": ("Approve, file and send the reply",
+                                "Approve it and the agent files the assessment and sends this reply. Edit the reply first if you want."),
             }.get(item.get("action"), ("Approve and release this content", "Approve it and the agent releases this content."))
-            if item.get("action") == "send" and not mailbox:
+            if item.get("action") in ("send", "brief_reply") and not mailbox:
                 effect += " No mailbox is connected yet, so the reply waits in the outbox."
             # Drafted content derives from untrusted material: always escaped.
             notes = "".join(f"<li>{escape(str(note))}</li>" for note in item.get("notes", []))
@@ -2014,6 +2016,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
       <button type="button" class="read" hidden>Read aloud</button></div>
     {to}
     <pre class="say">{escape(content.get("body", ""))}</pre>
+    {f'<details class="assessment"><summary>The assessment, filed to the folder when you approve</summary><pre class="say">{escape(content["assessment"])}</pre></details>' if content.get("assessment") else ""}
     {edit}
     <form method="post" action="/runs/{run_id}/approval" id="f-{run_id}" class="stack">
       <label class="eyebrow" for="c-{run_id}">Why this decision? The change to make, or your reason</label>

@@ -85,6 +85,11 @@ class EnquiryPolicy(BaseModel):
     per_address_per_day: int = 3
     waiting_cap: int = 100
     keep_days: int = 180
+    # The owner's Cal.com booking page, offered in the reply to a brief she wants to pursue.
+    booking_url: str | None = None
+    # Requests screened by the owner's rules each day, and emails sent on her standing approval each day.
+    screens_per_day: int = 50
+    standing_sends_per_day: int = 30
 
 
 class Settings(BaseModel):

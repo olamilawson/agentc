@@ -10,7 +10,7 @@ a data-state attribute, so a person and a script can both tell where things stan
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
@@ -171,6 +171,17 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         base = (settings.public_url or str(request.base_url)).rstrip("/")
         return f"{base}/brief/{token}"
 
+    def links_from(request: Request):
+        base = (settings.public_url or str(request.base_url)).rstrip("/")
+        return lambda token: f"{base}/brief/{token}"
+
+    def screen_quietly(enquiry_id: str, make_link) -> None:
+        """Screening runs after the person's page has loaded. Whatever happens, the request is already safe."""
+        try:
+            enq.screen_request(engine, enquiry_id, make_link)
+        except Exception as e:  # recorded; the request waits for the owner as it would without screening
+            db.audit(None, "screening_failed", {"enquiry": enquiry_id, "error": f"{type(e).__name__}: {e}"[:300]})
+
     def same_site(request: Request) -> bool:
         """A public form may be sent only from this site's own page. The brief page sends no referrer,
         so its browser sends Origin "null"; Sec-Fetch-Site still says where the form came from."""
@@ -319,7 +330,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         return request_page({"topic": topic_of(topic)}, {})
 
     @app.post("/enquire")
-    async def enquire(request: Request):
+    async def enquire(request: Request, background: BackgroundTasks):
         if not same_site(request):
             return PlainTextResponse("This form can be sent only from its own page.", status_code=403)
         form = await request.form()
@@ -332,9 +343,10 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
             return request_page(values, wrong, status=400)
         key = enq.address_key(network_address(request), settings.session_secret or "a machine with no session secret")
         try:
-            enq.receive(db, policy, fields, values["topic"], key, values["marketing"])
+            enquiry_id = enq.receive(db, policy, fields, values["topic"], key, values["marketing"])
         except enq.Refused as e:
             return request_page(values, {}, str(e), status=429)
+        background.add_task(screen_quietly, enquiry_id, links_from(request))
         return RedirectResponse("/enquire/sent", status_code=303)
 
     @app.get("/enquire/sent", response_class=HTMLResponse)
@@ -506,6 +518,50 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
     def state_chip(e: dict) -> str:
         return ws_api.chip(enq.STATES.get(e["status"], (e["status"], "c-slate")))
 
+    VERDICTS = {"invite": ("Agent: invite", "c-emerald"), "decline": ("Agent: decline", "c-slate"),
+                "ask": ("Agent: asks you", "c-amber")}
+
+    def verdict_chip(e: dict) -> str:
+        found = db.get_screening(e["id"])
+        return ws_api.chip(VERDICTS[found["decision"]]) if found and found["decision"] in VERDICTS else ""
+
+    TEMPLATE_STATES = {"standing": ("Sends on its own", "c-emerald"), "changed": ("Changed: approve it again", "c-amber"),
+                       "off": ("Waits for your approval each time", "c-slate")}
+
+    def handling_section() -> str:
+        """Her rules for requests, and the two emails she can let go out on their own."""
+        r = enq.rules(db)
+        today = enq.stamp(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
+        cards = ""
+        for kind in enq.TEMPLATES:
+            t = enq.template(db, kind)
+            fields = ", ".join("{" + f + "}" for f in enq.FIELDS)
+            cards += f"""
+<form method="post" action="/enquiries/templates/{kind}" class="stack template" data-state="{t["state"]}">
+  <div class="linkrow"><h3>{escape(t["label"])}</h3>{ws_api.chip(TEMPLATE_STATES[t["state"]])}</div>
+  <label>Subject <input type="text" name="subject" maxlength="200" value="{escape(t["subject"])}" required/></label>
+  <label>The email <span class="or">the agent fills in {escape(fields)}</span>
+    <textarea name="body" rows="9" maxlength="4000" required>{escape(t["body"])}</textarea></label>
+  <p class="meta">{f"Approved {escape(when(t['approved_at']))}. Emails built from these exact words go without asking you; editing them stops that until you approve again." if t["state"] == "standing" else "Each email built from this waits in Review for your approval."}</p>
+  <div class="actions"><button class="approve" name="action" value="approve">{icon("check")}Approve these words to send on their own</button>
+    <button name="action" value="save">Save, keep asking me</button>
+    {'<button name="action" value="off" class="reject">Stop sending on its own</button>' if t["state"] == "standing" else ""}</div>
+</form>"""
+        return f"""
+<section class="card" id="handling"><div class="linkrow"><h2>How the agent handles requests</h2>
+  <span class="meta">Today: {db.count_screenings(today)} of {policy.screens_per_day} screened ·
+   {enq.standing_sends_today(db)} of {policy.standing_sends_per_day} emails sent on your standing approval</span></div>
+  <form method="post" action="/enquiries/rules" class="stack">
+    <label>Your rules, in your own words <span class="or">the agent reads each new request against these. With none written, it reads nothing and every request waits for you.</span>
+      <textarea name="text" rows="5" maxlength="4000" placeholder="For example: Invite anyone from a company or agency asking about brand, marketing or communications. Decline students, job seekers and anyone selling me something. Ask me about anyone who works for a competitor of my clients.">{escape(r["text"])}</textarea></label>
+    <label class="tick"><input type="checkbox" name="decide"{" checked" if r["decide"] else ""}/> Let the agent invite or decline clear cases.
+      <span class="or">Unclear ones always wait for you, with its recommendation.</span></label>
+    <button class="approve">Save my rules</button>
+  </form>
+  <details{" open" if any(enq.template(db, k)["state"] != "standing" for k in enq.TEMPLATES) else ""}><summary>Emails that can go without asking you</summary>
+    <div class="columns two">{cards}</div></details>
+</section>"""
+
     def run_chip(run_id: str | None) -> str:
         run = db.get_run(run_id) if run_id else None
         if not run:
@@ -557,7 +613,8 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
             f'<li data-state="{e["status"]}"><a href="/enquiries/{e["id"]}"><span class="lead">{ui.stream_badge(e["organisation"] or e["first_name"])}'
             f'<span><b>{escape(name_of(e))}</b><small>{escape(" · ".join(x for x in (e["role"], e["organisation"], e["topic"]) if x))}'
             f'{" · you invited them" if e["origin"] == "owner" else ""}</small></span></span>'
-            f'<span class="end">{state_chip(e)}<span class="due">{escape(when(e["updated_at"]))}</span>{icon("chevron")}</span></a></li>'
+            f'<span class="end">{verdict_chip(e) if e["status"] == "received" else ""}{state_chip(e)}'
+            f'<span class="due">{escape(when(e["updated_at"]))}</span>{icon("chevron")}</span></a></li>'
             for e in shown
         )
         tabs = '<nav class="tabs" aria-label="Show">' + "".join(
@@ -572,6 +629,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
 <p class="lede">Requests from your public page, and the private links that let a person send you a brief. A request costs
  nothing. Only a brief sent through a link starts an evaluation, and {policy.evaluations_per_month} a month start by themselves.</p>
 {f'<div class="banner" role="status">{escape(notice)}</div>' if notice else ""}
+{"" if engine.harness.mail else '<p class="banner" role="status">No mailbox is connected yet, so every email, even one you approved, waits in the outbox on this server. Connect Outlook with <code>./deploy/setup.sh --mailbox</code> (see deploy/microsoft-graph.md).</p>'}
 <div class="strip" data-state="summary">
   <a href="/enquiries?status=received"><strong>{count("received")}</strong>Waiting for your decision</a>
   <a href="/enquiries?status=invited"><strong>{count("invited")}</strong>Links live</a>
@@ -583,6 +641,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
   <p class="actions"><code id="public-link">{escape(public)}</code><button type="button" data-copy="public-link" hidden>Copy the address</button>
    <a class="button" href="/enquire" target="_blank" rel="noopener">Open it</a></p>
 </section>
+{handling_section()}
 <details class="card add"><summary>{icon("plus")}Make a link for someone you know</summary>
   <form method="post" action="/enquiries/invite" class="stack">
     <p class="meta">For a client who has not used the public page. They fill in their other details and agree to the terms on the brief form.</p>
@@ -613,15 +672,66 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
         return RedirectResponse(f"/enquiries/{enquiry_id}?notice={quote('The link is live. Copy it, or prepare an email with it.')}",
                                 status_code=303)
 
+    @app.post("/enquiries/rules")
+    async def save_rules(request: Request):
+        form = await request.form()
+        text = str(form.get("text") or "").strip().replace("\r\n", "\n")[:4000]
+        decide = form.get("decide") == "on" and bool(text)
+        db.set_setting(enq.RULES_KEY, {"text": text, "decide": decide})
+        db.audit(None, "enquiry_rules_saved", {"decide": decide, "length": len(text)})
+        words = ("Saved. The agent screens new requests and carries out the clear ones." if decide else
+                 "Saved. The agent screens new requests and recommends; you decide each one." if text else
+                 "Saved. With no rules, every request waits for you.")
+        return RedirectResponse(f"/enquiries?notice={quote(words)}#handling", status_code=303)
+
+    @app.post("/enquiries/templates/{kind}")
+    async def save_template(kind: str, request: Request):
+        if kind not in enq.TEMPLATES:
+            raise HTTPException(404, "no such template")
+        form = await request.form()
+        action = str(form.get("action") or "save")
+        try:
+            if action == "off":
+                enq.turn_off(db, kind)
+                words = "Stopped. Each of these emails now waits for your approval."
+            else:
+                enq.save_template(db, kind, str(form.get("subject") or "").strip()[:200],
+                                  str(form.get("body") or "").strip().replace("\r\n", "\n")[:4000], approve=action == "approve")
+                words = ("Approved. Emails built from these exact words now go without asking you." if action == "approve"
+                         else "Saved. Each of these emails waits for your approval.")
+        except enq.Refused as err:
+            words = str(err)
+        return RedirectResponse(f"/enquiries?notice={quote(words)}#handling", status_code=303)
+
+    @app.post("/enquiries/{enquiry_id}/screen")
+    def screen_now(enquiry_id: str, request: Request):
+        owned(enquiry_id)
+        found = enq.screen_request(engine, enquiry_id, links_from(request))
+        why = {"no rules written": "Write your rules first; the agent screens by them.",
+               "daily limit": "Today's screening limit is reached.", "monthly cap": "The monthly spending cap is reached.",
+               "not waiting": "This request has already been decided."}
+        return back(f"/enquiries/{enquiry_id}", why.get(found.get("skipped"), "Screened."))
+
     @app.get("/enquiries/{enquiry_id}", response_class=HTMLResponse)
     def enquiry_page(enquiry_id: str, request: Request, notice: str = "") -> str:
         e = owned(enquiry_id)
         status = e["status"]
         mail_run = db.get_run(e["email_run"]) if e["email_run"] else None
+        screened = db.get_screening(e["id"])
+        verdict = (f'<section class="evaluation fit" data-state="{screened["decision"]}"><span class="mark">{icon("spark")}</span>'
+                   f'<div><p class="eyebrow">The agent read this against your rules</p><p>{verdict_chip(e)} {escape(screened["reason"] or "")}</p>'
+                   f'{"<p class=meta>It invited them, by your rules.</p>" if screened["acted"] == "invited" else ""}'
+                   f'{"<p class=meta>It declined them, by your rules.</p>" if screened["acted"] == "declined" else ""}</div></section>'
+                   if screened else
+                   f'<form method="post" action="/enquiries/{e["id"]}/screen"><button>{icon("spark")}Ask the agent to read it against your rules</button></form>'
+                   if status == "received" and enq.rules(db)["text"] else "")
+        invite_auto = enq.template(db, "invite")["state"] == "standing"
+        decline_auto = enq.template(db, "decline")["state"] == "standing"
         if status == "received":
             action = f"""
 <section class="card fit" data-state="deciding"><h2>Your decision</h2>
-  <p>A private link lets {escape(e["first_name"])} send one brief to your agent. Nothing is sent to them until you copy the link or approve an email with it.</p>
+  <p>A private link lets {escape(e["first_name"])} send a brief to your agent.
+   {"The invite email goes to them at once, on your standing approval." if invite_auto else "Nothing is sent to them until you copy the link or approve an email with it."}</p>
   <form method="post" action="/enquiries/{e["id"]}/invite" class="stack">
     {stream_choice(e["organisation"] or "")}
     {link_terms()}
@@ -630,7 +740,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
   <details><summary>Decline instead</summary>
     <form method="post" action="/enquiries/{e["id"]}/decline" class="stack">
       <label>A note for yourself <span class="or">optional; it is not sent</span><input type="text" name="note" maxlength="300"/></label>
-      <p class="meta">Declining sends nothing. If you want to tell them, write to them yourself.</p>
+      <p class="meta">{"Your approved decline note goes to them at once." if decline_auto else "Declining sends nothing. If you want to tell them, write to them yourself, or approve the decline note under How the agent handles requests."}</p>
       <button class="reject">Decline this request</button>
     </form></details>
 </section>"""
@@ -682,6 +792,7 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
     <p class="meta">Received {escape(when(e["created_at"]))}{f" · decided {escape(when(e['decided_at']))}" if e["decided_at"] else ""}.</p>
   </div>
 </article>
+{verdict}
 {action}
 {f'<section class="card fit"><h2>Briefs</h2>{"<p class=meta>A brief past this month&#39;s allowance waits for you to start its evaluation.</p>" if held else ""}<ul class="rows">{briefs}</ul></section>' if briefs else ""}
 """, script=COPY_SCRIPT)
@@ -697,6 +808,11 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
             enq.invite(db, policy, e["id"], stream, number(form, "days"), number(form, "briefs"))
         except enq.Refused as err:
             return back(f"/enquiries/{enquiry_id}", str(err))
+        if enq.template(db, "invite")["state"] == "standing":
+            sent = enq.send_template(engine, enquiry_id, "invite", link_for(request, db.get_enquiry(enquiry_id)["token"]))
+            if sent["sent_on_standing"]:
+                return back(f"/enquiries/{enquiry_id}", "The link is live, and the invite email went on your standing approval.")
+            return back(f"/enquiries/{enquiry_id}", "The link is live. " + sent["why"] + " The email waits in Review.")
         return back(f"/enquiries/{enquiry_id}", "The link is live. Copy it, or prepare an email with it.")
 
     @app.post("/enquiries/{enquiry_id}/decline")
@@ -707,6 +823,10 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
             enq.decline(db, enquiry_id, str(form.get("note") or "").strip()[:300])
         except enq.Refused as err:
             return back(f"/enquiries/{enquiry_id}", str(err))
+        if enq.template(db, "decline")["state"] == "standing":
+            sent = enq.send_template(engine, enquiry_id, "decline")
+            return back(f"/enquiries/{enquiry_id}", "Declined, and your decline note went to them." if sent["sent_on_standing"]
+                        else "Declined. " + sent["why"] + " The note waits in Review.")
         return back(f"/enquiries/{enquiry_id}", "Declined. Nothing went to them.")
 
     @app.post("/enquiries/{enquiry_id}/cancel")
@@ -722,10 +842,12 @@ def install(app: FastAPI, *, settings, db, engine, render, ws_api, dock) -> None
     def email_link(enquiry_id: str, request: Request):
         e = owned(enquiry_id)
         try:
-            run_id = enq.mail_link(engine, enquiry_id, link_for(request, e["token"] or ""))
+            sent = enq.mail_link(engine, enquiry_id, link_for(request, e["token"] or ""))
         except enq.Refused as err:
             return back(f"/enquiries/{enquiry_id}", str(err))
-        return RedirectResponse(f"/queue#d-{run_id}", status_code=303)
+        if sent["sent_on_standing"]:
+            return back(f"/enquiries/{enquiry_id}", "The invite email went on your standing approval.")
+        return RedirectResponse(f"/queue#d-{sent['run_id']}", status_code=303)
 
     @app.post("/enquiries/{enquiry_id}/briefs/{index}/evaluate")
     def evaluate_brief(enquiry_id: str, index: int, background: BackgroundTasks):
