@@ -173,13 +173,13 @@ def test_a_mode_changes_what_the_agent_is_asked_for(settings):
 
     gateway = Asked({"think": [ANSWER, ANSWER]})
     client = TestClient(create_app(settings, gateway=gateway), follow_redirects=False)
-    client.post("/think", data={"question": "The launch.", "mode": "plan"})
+    plan = client.post("/think", data={"question": "The launch.", "mode": "plan"}).headers["location"]
     client.post("/think", data={"question": "The launch.", "mode": "nonsense"})
     planned, asked = gateway.contexts
     assert "Produce a plan" in planned and "Produce a plan" not in asked
     runs = client.get("/runs").json()
     assert {r["inputs"]["mode"] for r in runs} == {"plan", "ask"}
-    page = client.get("/think").text
+    page = client.get(plan.split("#")[0]).text  # each question started its own conversation
     assert '<span class="tag c-blue">Plan</span>' in page and '<option value="research">' in page
 
 

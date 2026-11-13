@@ -60,7 +60,10 @@ def apply_retention(engine: Engine, now: datetime | None = None) -> list[dict]:
             "client": client, "retention_days": days, "files_deleted": len(files),
             "runs_cleared": forgotten, "runs_past_period_still_waiting": waiting,
         }
-        if files or forgotten or waiting:
+        chats = engine.db.delete_chats(client, cutoff_text)  # conversations idle past the period, with their files
+        if chats:
+            entry["conversations_deleted"] = chats
+        if files or forgotten or waiting or chats:
             engine.db.audit(None, "retention_applied", entry)
         report.append(entry)
     return report

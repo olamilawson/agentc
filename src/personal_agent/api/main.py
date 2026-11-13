@@ -266,6 +266,88 @@ GOAL_SCRIPT = """<script>
 </script>"""
 
 
+# The Think composer: names the files picked, refuses what the server would refuse before
+# anything uploads, keeps a typed message if the server sends the page back, sends once, and
+# opens the conversation at its latest turn.
+COMPOSER_SCRIPT = """<script>
+(function () {
+  var form = document.getElementById('composer');
+  if (!form) return;
+  var field = form.querySelector('textarea[name="question"]');
+  var input = form.querySelector('input[type="file"]');
+  var list = form.querySelector('.picked');
+  var help = document.getElementById('attach-help');
+  var helpText = help ? help.textContent : '';
+  var max = parseInt(input && input.getAttribute('data-max') || '5', 10);
+  var accept = (input && input.accept || '').split(',');
+  try {
+    if (document.getElementById('notice')) {
+      var kept = sessionStorage.getItem('draft');
+      if (kept && field && !field.value) field.value = kept;
+    }
+    sessionStorage.removeItem('draft');
+  } catch (e) {}
+  function problem(files) {
+    if (files.length > max) return 'Attach up to ' + max + ' files to one message.';
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i], dot = f.name.lastIndexOf('.'), ext = dot < 0 ? '' : f.name.slice(dot).toLowerCase();
+      if (accept.indexOf(ext) < 0) return f.name + ': the agent reads PDF, Word, text, Markdown and CSV files.';
+      if (f.size > 10 * 1024 * 1024) return f.name + ' is larger than 10 MB.';
+    }
+    return '';
+  }
+  if (input) input.addEventListener('change', function () {
+    list.textContent = '';
+    var files = input.files, wrong = problem(files);
+    for (var i = 0; i < files.length; i++) {
+      var li = document.createElement('li'), span = document.createElement('span');
+      span.textContent = files[i].name;
+      li.appendChild(span);
+      list.appendChild(li);
+    }
+    if (help) { help.textContent = wrong || helpText; help.className = wrong ? 'error grow' : 'or grow'; }
+    input.setCustomValidity(wrong);
+  });
+  form.addEventListener('submit', function (e) {
+    if (form.getAttribute('data-state') !== 'ready' && form.getAttribute('data-state') !== 'new') { e.preventDefault(); return; }
+    var wrong = input ? problem(input.files) : '';
+    if (!field.value.trim() || wrong) {
+      e.preventDefault();
+      if (wrong && help) { help.textContent = wrong; help.className = 'error grow'; }
+      else { field.focus(); }
+      return;
+    }
+    try { sessionStorage.setItem('draft', field.value); } catch (err) {}
+    form.setAttribute('data-state', 'sending');
+    var button = form.querySelector('button.approve');
+    if (button) { button.disabled = true; button.textContent = 'Sending…'; }
+  });
+  if (field) field.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); form.requestSubmit(); }
+  });
+  // While the agent answers, ask the server every two seconds; open the answer when it is in.
+  if (form.getAttribute('data-state') === 'waiting' && form.getAttribute('data-chat')) {
+    var chat = form.getAttribute('data-chat');
+    var poll = function () {
+      fetch('/think/' + chat + '/state', {headers: {Accept: 'application/json'}, credentials: 'same-origin'})
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (s) {
+          if (!s || s.state === 'waiting') { setTimeout(poll, 2000); return; }
+          var target = '/think?c=' + chat;
+          if (location.pathname + location.search === target) location.reload();
+          else location.assign(target + (s.last_turn ? '#q-' + s.last_turn.id : ''));
+        })
+        .catch(function () { setTimeout(poll, 4000); });
+    };
+    setTimeout(poll, 2000);
+  }
+  if (!location.hash) {
+    var turns = document.querySelectorAll('.thread .turn');
+    if (turns.length) turns[turns.length - 1].scrollIntoView({block: 'start'});
+  }
+})();
+</script>"""
+
 def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None, mail=None) -> FastAPI:
     settings = settings or load_settings()
     db = Database(settings.database_url)
@@ -1750,8 +1832,80 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
     STARTERS = ("What needs my attention in this workstream?", "Challenge this campaign idea.",
                 "Help me prepare a strategic recommendation.")
 
+    # A conversation on Think, as the composer sees it (data-state on the form):
+    #
+    #   ready --send--> sending (the page, as it submits) --> waiting (the last turn is queued or running)
+    #   waiting --answer in--> ready          waiting --run failed--> ready, with "Send again" on that turn
+    #
+    # The server refuses a message to a conversation whose last turn is still working, so two answers
+    # never race. Each turn's own state is its run's status (data-state on the turn).
+    def _adopt_earlier_questions() -> None:
+        for r in db.list_runs():
+            inputs = r["inputs"]
+            if r["workflow"] == "think" and isinstance(inputs, dict) and inputs.get("question") and not inputs.get("chat_id"):
+                db.adopt_into_chat(r)
+
+    def _chat_title(chat_turns: list[dict]) -> str:
+        first = next((str(t["inputs"]["question"]) for t in chat_turns if (t["inputs"] or {}).get("question")), "")
+        first = " ".join(first.split())
+        return (first[:60] + "…" if len(first) > 60 else first) or "Conversation"
+
+    def _when(stamp_text: str) -> str:
+        try:
+            moment = datetime.fromisoformat(stamp_text).astimezone(_zone())
+        except (TypeError, ValueError):
+            return ""
+        today = datetime.now(_zone()).date()
+        if moment.date() == today:
+            return f"Today, {moment:%H:%M}"
+        return f"{moment.day} {moment:%b}" + (f" {moment:%Y}" if moment.year != today.year else "")
+
+    def _size(n: int) -> str:
+        return f"{n / 1024 / 1024:.1f} MB" if n >= 1024 * 1024 else f"{max(1, n // 1024)} KB"
+
+    def _turn(r: dict) -> str:
+        inputs, out = r["inputs"] or {}, r["outputs"] or {}
+        status = r["status"]
+        if out.get("answer"):
+            caveats = "".join(f"<li>{escape(str(c))}</li>" for c in out.get("caveats", []))
+            links = "".join(
+                f'<li><a href="{escape(s["url"])}" rel="noopener noreferrer" target="_blank">{escape(s["title"])}</a>'
+                f'{" · " + escape(s["published"]) if s.get("published") else ""}</li>'
+                for s in out.get("sources", []) if str(s.get("url", "")).startswith(("http://", "https://"))
+            )
+            body = f'<pre class="say">{escape(out["answer"])}</pre>' + (
+                f'<p class="eyebrow">Assumed or not checked</p><ul class="notes say">{caveats}</ul>' if caveats else ""
+            ) + (f'<p class="eyebrow">Web pages it read, not checked</p><ul class="notes">{links}</ul>' if links else "")
+            after = (f'<button type="button" class="read" hidden>Read aloud</button>'
+                     f'<form method="post" action="/think/{r["id"]}/save"><button>Save to memory</button></form>')
+        elif status == "failed":
+            fields = {"question": inputs.get("question"), "mode": inputs.get("mode"), "depth": inputs.get("depth"),
+                      "chat": inputs.get("chat_id"), "web": "on" if inputs.get("web") else ""}
+            again = "".join(f'<input type="hidden" name="{k}" value="{escape(str(v))}"/>' for k, v in fields.items() if v)
+            body = (f'<p class="error" role="alert">{escape(r["error_reason"] or "The agent could not answer this.")}</p>'
+                    f'<form method="post" action="/think" class="again">{again}<button>Send again</button></form>')
+            after = ""
+        elif inputs.get("question") is None:
+            body, after = '<p class="quiet">The retention period removed this content.</p>', ""
+        else:
+            body, after = '<p class="thinking" role="status">The agent is thinking. This page updates itself.</p>', ""
+        files = inputs.get("files") or []
+        return f"""<li class="turn" id="q-{r["id"]}" data-state="{escape(status)}">
+  <p class="me">{escape(str(inputs.get("question") or "Message removed"))}</p>
+  {f'<p class="sent-files">Attached: {escape(", ".join(files))}</p>' if files else ""}
+  <div class="agent">
+    <p class="chips"><span class="tag c-blue">{escape(MODE_WORDS.get(inputs.get("mode"), "Ask").split(":")[0])}</span>
+      <span class="tag c-purple">{escape(DEPTH_WORDS.get(inputs.get("depth"), "Considered"))}</span>
+      <span class="s-{escape(status)}">{escape(STATUS_WORDS.get(status, status))}</span></p>
+    {body}
+    {after}
+    <p class="meta"><a href="/inspect/{r["id"]}">How the agent got here</a> · ${r["cost_usd"] or 0:.4f}</p>
+  </div>
+</li>"""
+
     @app.get("/think", response_class=HTMLResponse)
-    def think_page(notice: str = "", wait: str = "", start: str = "") -> str:
+    def think_page(notice: str = "", wait: str = "", start: str = "", c: str = "", new: str = "") -> str:
+        _adopt_earlier_questions()
         names = [n for n in engine.harness.clients.list_clients() if n != NO_CLIENT]
         options = "".join(f'<option value="{escape(n)}">{escape(n)}</option>' for n in names)
         depths = "".join(
@@ -1761,46 +1915,85 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         )
         missing = _missing_model_keys()
         no_key = (
-            f'<p class="banner" role="status">The server has no {escape(" or ".join(missing))} yet, so a question gets '
+            f'<p class="banner" role="status">The server has no {escape(" or ".join(missing))} yet, so a message gets '
             'no answer. Add the key on the server, or choose another model on <a href="/cost#models">Settings and cost</a>.</p>'
             if missing else ""
         )
-        past = [r for r in db.list_runs() if r["workflow"] == "think"][:20]
-        cards = []
-        for r in past:
-            inputs, out = r["inputs"] or {}, r["outputs"] or {}
-            if out.get("answer"):
-                caveats = "".join(f"<li>{escape(str(c))}</li>" for c in out.get("caveats", []))
-                links = "".join(
-                    f'<li><a href="{escape(s["url"])}" rel="noopener noreferrer" target="_blank">{escape(s["title"])}</a>'
-                    f'{" · " + escape(s["published"]) if s.get("published") else ""}</li>'
-                    for s in out.get("sources", []) if str(s.get("url", "")).startswith(("http://", "https://"))
-                )
-                body = f'<pre class="say">{escape(out["answer"])}</pre>' + (
-                    f'<p class="eyebrow">Assumed or not checked</p><ul class="notes say">{caveats}</ul>' if caveats else ""
-                ) + (f'<p class="eyebrow">Web pages it read, not checked</p><ul class="notes">{links}</ul>' if links else "")
-            elif r["status"] == "failed":
-                body = f'<p class="error">{escape(r["error_reason"] or "This run failed.")}</p>'
-            elif inputs.get("question") is None:
-                body = '<p class="quiet">The retention period removed this content.</p>'
-            else:
-                body = '<p class="quiet">The agent is thinking. This page updates itself.</p>'
-            cards.append(f"""<section class="card" id="q-{r["id"]}">
-  <p class="chips"><span class="tag c-blue">{escape(MODE_WORDS.get(inputs.get("mode"), "Ask").split(":")[0])}</span>
-    <span class="tag c-purple">{escape(DEPTH_WORDS.get(inputs.get("depth"), "Considered"))}</span>
-    <span class="tag c-slate">{escape(r["client"])}</span>
-    <span class="s-{escape(r["status"])}">{escape(STATUS_WORDS.get(r["status"], r["status"]))}</span></p>
-  <h3 class="say">{escape(str(inputs.get("question") or "Question removed"))}</h3>
-  <button type="button" class="read" hidden>Read aloud</button>
-  {body}
-  <p class="meta"><a href="/inspect/{r["id"]}">How the agent got here</a> · ${r["cost_usd"] or 0:.4f}</p>
-  {f'<form method="post" action="/think/{r["id"]}/save"><button>Save to memory</button></form>' if out.get("answer") else ""}
-</section>""")
-        waiting = any(r["id"] == wait and r["status"] in ("queued", "running") for r in past)
-        web_choice = _web_choice("your question")
-        starters = "".join(
-            f'<a href="/think?start={quote(text)}">{escape(text)}</a>' for text in STARTERS
+        all_turns: dict[str, list[dict]] = {}
+        for r in db.list_runs():
+            chat_id = (r["inputs"] or {}).get("chat_id") if r["workflow"] == "think" else None
+            if chat_id:
+                all_turns.setdefault(chat_id, []).append(r)
+        for chat_turns in all_turns.values():
+            chat_turns.sort(key=lambda r: r["created_at"])
+        chats = [ch for ch in db.list_chats() if all_turns.get(ch["id"])]
+        # Which conversation is open: the one named, the one a message just went to, a new one, or the latest.
+        if not c and wait:
+            c = next((cid for cid, ts in all_turns.items() if any(t["id"] == wait for t in ts)), "")
+        chat = None if (new or start) else next((ch for ch in chats if ch["id"] == c), None) or (
+            None if c else (chats[0] if chats else None))
+        chat_turns = all_turns.get(chat["id"], []) if chat else []
+        working = bool(chat_turns) and chat_turns[-1]["status"] in ("queued", "running")
+
+        convo_rows = "".join(
+            f'<li><a href="/think?c={ch["id"]}"{" aria-current=\"page\"" if chat and ch["id"] == chat["id"] else ""}'
+            f' data-state="{escape(all_turns[ch["id"]][-1]["status"])}"><b>{escape(_chat_title(all_turns[ch["id"]]))}</b>'
+            f'<small>{escape(_when(ch["updated_at"]))}'
+            f'{" · " + escape(ch["workstream"]) if ch["workstream"] != NO_CLIENT else ""}'
+            f' · {len(all_turns[ch["id"]])} message{"s" if len(all_turns[ch["id"]]) != 1 else ""}</small></a></li>'
+            for ch in chats[:30]
         )
+        files = db.list_chat_files(chat["id"]) if chat else []
+        file_chips = "".join(
+            f'<li title="{escape(f["name"])}">{ui.icon("brief")}<span>{escape(f["name"])}</span>'
+            f'<small>{_size(f["size"] or 0)}</small></li>' for f in files
+        )
+        starters = "".join(f'<a href="/think?start={quote(text)}">{escape(text)}</a>' for text in STARTERS)
+        if chat:
+            head = f"""<div class="chat-head"><h2>{escape(_chat_title(chat_turns))}</h2>
+  <p class="chips"><span class="tag c-slate">{escape(chat["workstream"])}</span>
+  {f'<span class="tag c-blue">{len(files)} file{"s" if len(files) != 1 else ""}</span>' if files else ""}</p></div>
+{f'<ul class="chat-files" aria-label="Files the agent reads in this conversation">{file_chips}</ul>' if files else ""}
+<ol class="thread">{"".join(_turn(r) for r in chat_turns)}</ol>"""
+            where = f'<input type="hidden" name="chat" value="{chat["id"]}"/>'
+        else:
+            head = f"""<div class="chat-head"><h2>New conversation</h2></div>
+<div class="chat-empty"><p class="quiet">Ask anything, attach a document, then keep going: each answer reads the conversation
+ so far and every file in it.</p><p class="eyebrow">A good place to start</p><nav class="filters">{starters}</nav></div>"""
+            where = (f'<label>Workstream <span class="or">the agent reads this workstream\'s knowledge and no other\'s. '
+                     f'It stays the same for the whole conversation</span>'
+                     f'<select name="client"><option value="">No workstream</option>{options}</select></label>')
+        state = "waiting" if working else "ready"
+        why = ('<p class="why" id="why-wait">The agent is still answering. You can send the next message when the answer '
+               'is in.</p>') if working else ""
+        dis = ' disabled aria-describedby="why-wait"' if working else ""
+        composer = f"""<form method="post" action="/think" enctype="multipart/form-data" class="stack composer" id="composer"
+  data-state="{state}"{f' data-chat="{chat["id"]}"' if chat else ""} novalidate>
+  {where if chat else ""}
+  <label>{"Your message" if chat else "Your question"}
+    <textarea name="question" rows="3" maxlength="8000" required{dis}
+      placeholder="{"Ask a follow-up, or attach a file and ask about it" if chat else "Ask a question, or attach a file and ask about it"}">{escape(start[:500])}</textarea></label>
+  <ul class="picked" aria-live="polite"></ul>
+  <div class="composer-bar">
+    <label class="attach">{ui.icon("clip")} Attach files
+      <input type="file" name="files" multiple accept="{",".join(think.READABLE)}" data-max="{think.MAX_FILES_PER_MESSAGE}"{dis}
+        aria-describedby="attach-help"/></label>
+    <span class="or grow" id="attach-help">PDF, Word, text or CSV, up to 10 MB each, {think.MAX_FILES_PER_MESSAGE} at a time</span>
+    <button class="approve"{dis}>{"Send" if chat else "Ask this question"}</button>
+  </div>
+  {why}
+  <details class="options"><summary>Options: how the agent answers</summary><div>
+    <label>Material to reason from <span class="or">optional: paste a note, a mail, figures</span>
+      <textarea name="material" rows="3" maxlength="100000"></textarea></label>
+    <div class="row two">
+      <label>Mode <select name="mode">{"".join(f'<option value="{k}">{escape(v)}</option>' for k, v in MODE_WORDS.items())}</select></label>
+      <label>Depth, and the model that answers
+        <select name="depth">{depths}</select></label>
+    </div>
+    {"" if chat else where}
+    {_web_choice("your message")}
+  </div></details>
+</form>"""
         lens = "".join(f"<li>{escape(q)}</li>" for q in settings.core.lens)
         skill_links = "".join(
             f'<li><a href="{href or "/think?start=" + quote(name + ": ")}"><span class="lead"><span><b>{name}</b>'
@@ -1811,33 +2004,22 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
         return render("Think", "think", f"""
 <p class="crumb">{escape(settings.brand_name)} / Think</p>
 <h1>Let's think this through.</h1>
-<p class="lede">A quiet space for sharper thinking. The agent reasons from your question, the material you paste and what
- you have recorded about the workstream. It reads no web page and no file, and it sends nothing to anyone.</p>
-{f'<div class="banner" role="alert">{escape(notice)}</div>' if notice else ""}
+<p class="lede">Talk it through with the agent. Attach a PDF or Word file and it reads it, along with the conversation so far and
+ what you have recorded about the workstream. It sends nothing to anyone.</p>
+{f'<div class="banner" role="alert" id="notice">{escape(notice)}</div>' if notice else ""}
 {no_key}
 <div class="columns think">
 <div>
-<section class="card">
-  <p class="eyebrow">A good place to start</p>
-  <nav class="filters">{starters}</nav>
-  <form method="post" action="/think" class="stack">
-    <label>Your question <textarea name="question" rows="4" maxlength="8000" required>{escape(start[:500])}</textarea></label>
-    <label>Material to reason from <span class="or">optional: paste a note, a mail, figures</span>
-      <textarea name="material" rows="4" maxlength="100000"></textarea></label>
-    <div class="row two">
-      <label>Mode <select name="mode">{"".join(f'<option value="{k}">{escape(v)}</option>' for k, v in MODE_WORDS.items())}</select></label>
-      <label>Depth, and the model that answers
-        <select name="depth">{depths}</select></label>
-    </div>
-    <label>Context <span class="or">the agent reads this workstream's knowledge and no other's</span>
-      <select name="client"><option value="">No workstream</option>{options}</select></label>
-    {web_choice}
-    <button class="approve">Ask this question</button>
-  </form>
+<section class="card chat" aria-label="Conversation" data-state="{state if chat else "new"}">
+{head}
+{composer}
 </section>
-{"<h2>Answers</h2>" + "".join(cards) if cards else ""}
 </div>
 <aside>
+<section class="card">
+  <div class="linkrow"><h2>Conversations</h2><a class="new-chat" href="/think?new=1">{ui.icon("plus")} New</a></div>
+  {f'<ul class="convos">{convo_rows}</ul>' if convo_rows else '<p class="quiet">Your conversations will be listed here.</p>'}
+</section>
 <section class="card">
   <div class="linkrow"><h2>The {escape(settings.owner_name)} lens</h2></div>
   <p class="quiet">Good thinking should survive scrutiny. Each answer is tested against these.</p>
@@ -1850,30 +2032,74 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
 </section>
 </aside>
 </div>
-""", script=GOAL_SCRIPT + READ_ALOUD_SCRIPT, refresh=4 if waiting else 0)
+""", script=GOAL_SCRIPT + READ_ALOUD_SCRIPT + COMPOSER_SCRIPT)
+
+    @app.get("/think/{chat_id}/state")
+    def chat_state(chat_id: str) -> dict:
+        """The conversation's state, for the page to wait on and for an agent to read."""
+        if not db.get_chat(chat_id):
+            raise HTTPException(404, "no such conversation")
+        chat_turns = think.turns(db, chat_id)
+        last = chat_turns[-1] if chat_turns else None
+        waiting = bool(last) and last["status"] in ("queued", "running")
+        return {"chat": chat_id, "state": "waiting" if waiting else "ready", "turns": len(chat_turns),
+                "last_turn": {"id": last["id"], "status": last["status"]} if last else None}
 
     @app.post("/think")
     async def ask(request: Request, background: BackgroundTasks):
         form = await request.form()
+        chat_id = str(form.get("chat") or "").strip()
+        chat = db.get_chat(chat_id) if chat_id else None
+        back_to = f"&c={chat_id}" if chat else ""
+
+        def back(reason: str):
+            return RedirectResponse(f"/think?notice={quote(reason)}{back_to}", status_code=303)
+
+        if chat_id and not chat:
+            return back("That conversation no longer exists. Start a new one.")
         question = str(form.get("question") or "").strip()
         if not question:
-            return RedirectResponse(f"/think?notice={quote('Type a question first.')}", status_code=303)
-        client = str(form.get("client") or "").strip() or NO_CLIENT
-        if client != NO_CLIENT and client not in engine.harness.clients.list_clients():
-            return RedirectResponse(f"/think?notice={quote('Choose a client from the list.')}", status_code=303)
+            return back("Type a question first.")
+        if chat:
+            client = chat["workstream"]  # fixed for the conversation, as a run's client scope is
+            chat_turns = think.turns(db, chat["id"])
+            if chat_turns and chat_turns[-1]["status"] in ("queued", "running"):
+                return back("The agent is still answering. Send your next message when the answer is in.")
+        else:
+            client = str(form.get("client") or "").strip() or NO_CLIENT
+            if client != NO_CLIENT and client not in engine.harness.clients.list_clients():
+                return back("Choose a client from the list.")
+        uploads = [u for u in form.getlist("files") if getattr(u, "filename", "")]
+        if len(uploads) > think.MAX_FILES_PER_MESSAGE:
+            return back(f"Attach up to {think.MAX_FILES_PER_MESSAGE} files to one message.")
+        read = []
+        for upload in uploads:
+            data = await upload.read()
+            try:
+                kind, text = think.read_attachment(upload.filename, data)
+            except think.Unreadable as e:
+                return back(f"Nothing was sent. {e}")
+            read.append((upload.filename, kind, len(data), text))
         depth = str(form.get("depth") or "")
+        new_chat = chat is None
+        chat_id = chat["id"] if chat else db.create_chat(client)
         inputs = {
             "question": question[:8000], "material": str(form.get("material") or "").replace("\r\n", "\n")[:100_000],
             "depth": depth if depth in think.DEPTHS else "considered",
             "mode": str(form.get("mode") or "") if str(form.get("mode") or "") in think.MODES else "ask",
-            "web": form.get("web") == "on",
+            "web": form.get("web") == "on", "chat_id": chat_id, "files": [name for name, *_ in read],
         }
         try:
             run_id = engine.start_run("think", client, inputs, work=False)
         except costs.MonthlyCapReached as e:
-            return RedirectResponse(f"/think?notice={quote(str(e))}", status_code=303)
+            if new_chat:
+                db.delete_chat(chat_id)
+            return back(str(e))
+        for name, kind, size, text in read:
+            db.add_chat_file(chat_id, name, kind, size, text)
+        db.touch_chat(chat_id)
         background.add_task(engine.work, run_id)
-        return RedirectResponse(f"/think?wait={run_id}#q-{run_id}", status_code=303)
+        return RedirectResponse(f"/think?wait={run_id}&c={chat_id}#q-{run_id}", status_code=303)
 
     # --- intelligence -----------------------------------------------------------------
     @app.get("/intelligence", response_class=HTMLResponse)

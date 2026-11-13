@@ -337,6 +337,31 @@ owner_settings = Table(
     Column("updated_at", String),
 )
 
+# A conversation on Think. Its turns are the think runs whose inputs carry its
+# id; the workstream is fixed when it starts, as a run's client scope is.
+chats = Table(
+    "chats",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("workstream", String, index=True),
+    Column("created_at", String),
+    Column("updated_at", String),
+)
+
+# A file the owner attached to a conversation. Only the text read from it is
+# kept; the agent reads it as data on every later turn of that conversation.
+chat_files = Table(
+    "chat_files",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("chat_id", String, index=True),
+    Column("name", String),
+    Column("kind", String),  # pdf | docx | text
+    Column("size", Integer),  # bytes of the file as sent
+    Column("text", String),
+    Column("created_at", String),
+)
+
 # The owner's choice of model for a tier, made on the Settings screen. A row
 # replaces that tier's line in config/route_table.yaml; no row leaves the file's.
 model_routes = Table(
@@ -432,6 +457,11 @@ owner_edits = Table(
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _fine() -> str:
+    """To the microsecond: conversations started in the same second still sort by which came last."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def new_id() -> str:
@@ -777,7 +807,68 @@ class Database:
                 select(audit_log).order_by(audit_log.c.created_at.desc()).limit(limit)
             ).mappings()]
 
+    # --- conversations on Think ---------------------------------------------------
+    def create_chat(self, workstream: str) -> str:
+        chat_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(insert(chats).values(id=chat_id, workstream=workstream, created_at=_fine(), updated_at=_fine()))
+        return chat_id
+
+    def get_chat(self, chat_id: str) -> dict | None:
+        with self.engine.connect() as cx:
+            row = cx.execute(select(chats).where(chats.c.id == chat_id)).mappings().first()
+        return dict(row) if row else None
+
+    def list_chats(self) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(select(chats).order_by(chats.c.updated_at.desc())).mappings()]
+
+    def delete_chat(self, chat_id: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(delete(chat_files).where(chat_files.c.chat_id == chat_id))
+            cx.execute(delete(chats).where(chats.c.id == chat_id))
+
+    def adopt_into_chat(self, run: dict) -> str:
+        """A question asked before conversations existed becomes a conversation of one turn.
+        The run's times are left as they were, so retention still counts from its last activity."""
+        chat_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(insert(chats).values(id=chat_id, workstream=run["client"], created_at=run["created_at"],
+                                            updated_at=run["updated_at"]))
+            cx.execute(update(runs).where(runs.c.id == run["id"]).values(inputs={**run["inputs"], "chat_id": chat_id}))
+        return chat_id
+
+    def touch_chat(self, chat_id: str) -> None:
+        with self.engine.begin() as cx:
+            cx.execute(update(chats).where(chats.c.id == chat_id).values(updated_at=_fine()))
+
+    def add_chat_file(self, chat_id: str, name: str, kind: str, size: int, text: str) -> str:
+        file_id = new_id()
+        with self.engine.begin() as cx:
+            cx.execute(insert(chat_files).values(id=file_id, chat_id=chat_id, name=name, kind=kind, size=size,
+                                                 text=text, created_at=now()))
+        return file_id
+
+    def list_chat_files(self, chat_id: str) -> list[dict]:
+        with self.engine.connect() as cx:
+            return [dict(r) for r in cx.execute(
+                select(chat_files).where(chat_files.c.chat_id == chat_id).order_by(chat_files.c.created_at)
+            ).mappings()]
+
+    def delete_chats(self, workstream: str, older_than: str | None = None) -> int:
+        """Remove a workstream's conversations and their files: all of them, or those idle since older_than."""
+        stmt = select(chats.c.id).where(chats.c.workstream == workstream)
+        if older_than:
+            stmt = stmt.where(chats.c.updated_at < older_than)
+        with self.engine.begin() as cx:
+            ids = [r[0] for r in cx.execute(stmt)]
+            if ids:
+                cx.execute(delete(chat_files).where(chat_files.c.chat_id.in_(ids)))
+                cx.execute(delete(chats).where(chats.c.id.in_(ids)))
+        return len(ids)
+
     def forget_client_settings(self, client: str) -> None:
+        self.delete_chats(client)
         with self.engine.begin() as cx:
             # A deleted client's tasks, decisions, knowledge and signals go with it.
             for table in (tasks, decisions, memory_items, signals, dispatches, watch_sources, feed_items):

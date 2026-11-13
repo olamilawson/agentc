@@ -53,8 +53,8 @@ She runs her practice through the agent and wants it to do the routine work.
 | Stage | What she does | Where | How she likely feels | Status |
 |---|---|---|---|---|
 | Start the day | Opens the app to see what needs her | /today | Wants one list | Works, but requests, approvals and tasks sit on separate pages |
-| Ask the agent | Types a question, then a follow-up | /think | Expects a conversation | **Broken**: one question, one answer. No follow-up, no thread |
-| Give it material | Attaches a document to a question or task | /think, /new | Expects a paperclip | **Missing**: files can only be added inside a client folder (/clients/{name}) |
+| Ask the agent | Types a question, then a follow-up | /think | Expects a conversation | Works: conversations with follow-ups, listed beside the thread |
+| Give it material | Attaches a document to a question | /think | Expects a paperclip | Works: PDF, Word, text and CSV files, read on every later turn. Images are not read yet. Tasks on /new still take files per form |
 | Handle requests | Reads requests, sets rules, approves templates | /enquiries | Wants it to run itself | Works (deployed? see below). The rules start empty, so nothing is screened until she writes them |
 | Approve work | Approves or edits replies and assessments | /queue | Wants one tap | Works |
 | Follow up | Checks whether a client replied | — | Wants it tracked | **Missing**: replies to her emails do not come back into the app |
@@ -71,9 +71,9 @@ requests" is not live yet.
 
 Ordered by how many people hit them and how often.
 
-1. **Owner chat with attachments.** One conversation with follow-ups, a
-   paperclip, and the agent able to start tasks from it. She uses this every
-   day.
+1. **Owner chat with attachments.** Built: conversations with follow-ups and
+   a paperclip. Still to come: the agent starting tasks from the chat, and
+   reading images.
 2. **Returning clients get back in.** Recognise a known email. Send a fresh
    private link by email ("Email me a new link") with no password. Give each
    client a page of their briefs and replies behind that link.

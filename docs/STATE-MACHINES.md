@@ -69,6 +69,30 @@ second press does nothing) and, on the request page, `closed` when
 `waiting_cap` requests already wait. The brief form also carries `data-step`
 (1 for details, 2 for the brief).
 
+## A conversation on Think
+
+Table `chats`; each message is a `think` run whose `inputs.chat_id` names the
+conversation, so a turn's state is its run's state. Files attached to it are
+rows in `chat_files` (the text read from them, nothing else). The workstream is
+fixed when the conversation starts. Routes live in `api/main.py` (`/think`);
+what a turn reads is decided in `engine/think.py` (`conversation_material`).
+
+```
+composer:  ready --send--> sending (the page, as it submits) --> waiting (last turn queued or running)
+           waiting --answer in--> ready
+           waiting --run failed--> ready, with "Send again" on the failed turn
+```
+
+The server refuses a message to a conversation whose last turn is still
+working, so one answer is in progress at a time. A file the agent cannot read
+refuses the whole message, and nothing is sent.
+
+Observe: `GET /think/{chat_id}/state` returns `{state: waiting | ready,
+turns, last_turn: {id, status}}`; the page polls it while waiting. The
+composer form and each turn carry `data-state`; the disabled Send button names
+its reason through `aria-describedby`. A client's retention period and its
+deletion remove its conversations and their files.
+
 ## Run
 
 Table `runs`, column `status`, moved by `engine/runner.py`.
