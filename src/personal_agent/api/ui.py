@@ -29,6 +29,7 @@ _LATIN_EXT = ("U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+030
 FONT_FILES = [
     ("Newsreader", "newsreader"),
     ("Plus Jakarta Sans", "plus-jakarta-sans"),
+    ("Instrument Sans", "instrument-sans"),  # the Ijeoma.Pro boards' typeface
 ]
 _FACES = "\n".join(
     f'@font-face {{ font-family: "{family}"; font-style: normal; font-weight: 200 800; font-display: swap;\n'
@@ -542,6 +543,7 @@ td { font-variant-numeric: tabular-nums; }
   --hero: linear-gradient(100deg, #fff1e8, #fff8f3 60%, #fffdfc); --evaluation: linear-gradient(100deg, #fff1e8, #fff8f3);
   --rail: linear-gradient(160deg, #b83d07 0%, #a22d03 40%, #5f1c09 100%); --rail-text: #ffd8c1; --rail-line: rgba(255, 255, 255, .18);
   --rail-hover: rgba(255, 255, 255, .1); --rail-active: #c94a10;
+  --sans: "Instrument Sans", "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --serif: var(--sans);
   --shadow: 0 6px 15px rgba(104, 32, 12, .04);
 }

@@ -142,6 +142,7 @@ def test_pages_use_the_bundled_fonts_and_call_no_other_host(client):
             assert (fonts / name).read_bytes()[:4] == b"wOF2"
             assert f"/static/fonts/{name}" in ui.CSS
     assert (fonts / "Newsreader-LICENSE.txt").exists() and (fonts / "PlusJakartaSans-LICENSE.txt").exists()
+    assert (fonts / "InstrumentSans-LICENSE.txt").exists()
     page = client.get("/login").text
     assert "http://" not in page and "https://" not in page  # no font host, no outside request at all
 
