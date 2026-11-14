@@ -15,7 +15,7 @@ def _client(settings, **responses) -> TestClient:
 
 def test_an_empty_home_greets_the_owner_and_says_nothing_waits(settings, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    page = _client(settings).get("/").text
+    page = _client(settings).get("/overview").text
     assert ", Chidimma.</h1>" in page and "CHIDIMMA OS" not in page  # the name is upper-cased by the stylesheet
     assert 'class="hero clear"' in page and "All caught up" in page
     assert "Nothing is waiting on you." in page and "No open item." in page and "No signal on the watchlist yet." in page
@@ -37,7 +37,7 @@ def test_home_shows_the_waiting_item_and_its_workstream(settings, monkeypatch):
                      verify_evidence=[VERDICTS_OK])
     sent = client.post("/new", data={"workflow": "brief-evaluation", "client_new": "Acme Bank", "brief_text": BRIEF})
     run_id = sent.headers["location"].rsplit("/", 1)[1]
-    page = client.get("/").text
+    page = client.get("/overview").text
     assert "<b>1</b><span>Decision</span>" in page
     assert "For Acme Bank. Open it to read it and decide." in page
     assert page.count(f'href="/queue#d-{run_id}"') == 2  # My view and the priority both open its sheet
@@ -48,7 +48,7 @@ def test_home_shows_the_waiting_item_and_its_workstream(settings, monkeypatch):
 
 
 def test_the_goal_typed_on_home_never_travels_in_the_url(settings):
-    page = _client(settings).get("/").text
+    page = _client(settings).get("/overview").text
     assert 'id="ask-goal"' in page and 'name="goal"' not in page  # no name, so the form sends no text
     assert "sessionStorage.getItem('goal')" in _client(settings).get("/think").text
 

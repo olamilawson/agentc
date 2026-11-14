@@ -348,6 +348,52 @@ COMPOSER_SCRIPT = """<script>
 })();
 </script>"""
 
+# The command box on My Studio: a starter fills it, it grows as she types, Enter sends (Shift and
+# Enter for a new line), files are named as picked and refused before upload if they cannot be
+# read, and a command goes once.
+STUDIO_SCRIPT = """<script>
+(function () {
+  var form = document.getElementById('studio-command');
+  if (!form) return;
+  var field = form.querySelector('textarea'), input = form.querySelector('input[type="file"]');
+  var list = document.querySelector('.studio-picked'), accept = input.accept.split(',');
+  function grow() { field.style.height = 'auto'; field.style.height = Math.min(field.scrollHeight, 220) + 'px'; }
+  function problem() {
+    var files = input.files;
+    if (files.length > 5) return 'Attach up to 5 files to one message.';
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i], dot = f.name.lastIndexOf('.'), ext = dot < 0 ? '' : f.name.slice(dot).toLowerCase();
+      if (accept.indexOf(ext) < 0) return f.name + ': the agent reads PDF, Word, text, Markdown and CSV files.';
+      if (f.size > 10 * 1024 * 1024) return f.name + ' is larger than 10 MB.';
+    }
+    return '';
+  }
+  function show() {
+    list.textContent = '';
+    for (var i = 0; i < input.files.length; i++) {
+      var li = document.createElement('li'); li.textContent = input.files[i].name; list.appendChild(li);
+    }
+    var wrong = problem();
+    if (wrong) { var li = document.createElement('li'); li.className = 'error'; li.textContent = wrong; list.appendChild(li); }
+  }
+  document.querySelectorAll('[data-say]').forEach(function (b) {
+    b.addEventListener('click', function () { field.value = b.getAttribute('data-say') + ': '; grow(); field.focus(); });
+  });
+  field.addEventListener('input', grow);
+  field.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+  });
+  input.addEventListener('change', show);
+  form.addEventListener('submit', function (e) {
+    if (form.getAttribute('data-state') !== 'ready' || !field.value.trim() || problem()) {
+      e.preventDefault(); show(); if (!field.value.trim()) field.focus(); return;
+    }
+    form.setAttribute('data-state', 'sending');
+    form.querySelector('button.send').disabled = true;
+  });
+})();
+</script>"""
+
 def create_app(settings: Settings | None = None, gateway: ModelGateway | None = None, mail=None) -> FastAPI:
     settings = settings or load_settings()
     db = Database(settings.database_url)
@@ -1685,8 +1731,113 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
   </div>
 </div>{DOCK_SCRIPT}"""
 
+    # --- home: My Studio, "Ask Ijeoma." ---------------------------------------------
+    # The owner's home, from the reference boards: a command box that starts a conversation, her
+    # three agents with what each is doing, the decision queue, and counts that open their screens.
+    # Everything is read from the data on each visit; nothing here is sample content.
+    AGENTS = (
+        ("The Strategist", "Strategy and direction", "intelligence",
+         {"brief-evaluation", "strategy-drafting", "sponsorship-triage", "signal-scan", "competitor-analysis",
+          "reputation-assessment", "research-synthesis", "proposal-review", "task-prioritisation", "campaign-review",
+          "think"}, "/new"),
+        ("The Creator", "Words and ideas", "draft",
+         {"creative-review", "studio", "copy-review", "executive-email", "executive-update", "media-summary",
+          "logo-critique", "follow-up-management"}, "/studio"),
+        ("The Builder", "Websites and prototypes", "laptop", set(), ""),
+    )
+
+    def _agent_row(name: str, line: str, glyph: str, flows: set[str], href: str, runs: list[dict]) -> str:
+        mine = [r for r in runs if r["workflow"] in flows]
+        busy = sum(r["status"] in ("queued", "running") for r in mine)
+        waiting = sum(r["status"] in ("waiting_for_approval", "waiting_for_input") for r in mine)
+        week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
+        done = sum(r["status"] == "done" and (r["updated_at"] or "") >= week for r in mine)
+        if not flows:
+            state, chip, detail = "not_set_up", '<span class="tag c-slate">Not set up yet</span>', line
+        elif busy:
+            state, chip = "working", '<span class="tag c-amber">Working</span>'
+            detail = f"{line} · working on {busy}"
+        else:
+            state, chip = "available", '<span class="tag c-emerald">Available</span>'
+            detail = f"{line} · " + (f"{waiting} waiting for you" if waiting else f"{done} done this week")
+        inner = (f'<span class="lead"><span class="glyph">{ui.icon(glyph)}</span><span><b>{name}</b>'
+                 f'<small>{escape(detail)}</small></span></span><span class="end">{chip}'
+                 f'{ui.icon("chevron") if href else ""}</span>')
+        return (f'<li data-state="{state}">' + (f'<a href="{href}">{inner}</a>' if href else f'<div>{inner}</div>') + "</li>")
+
     @app.get("/", response_class=HTMLResponse)
     def home() -> str:
+        runs = db.list_runs()
+        decisions = [i for i in ws_api.items() if i["status"] == "awaiting_approval"]
+        queue_rows = "".join(
+            f'<li><a href="{"/work" + i["href"] if i["href"].startswith("#") else i["href"]}"><span class="lead">'
+            f'<span class="glyph">{ui.icon("brief")}</span><span><b>{escape(i["title"])}</b>'
+            f'<small>{escape(i["ws"])} · review it, then approve or ask for changes</small></span></span>'
+            f'<span class="end">{ui.icon("chevron")}</span></a></li>'
+            for i in decisions[:4]
+        )
+        projects = [n for n in engine.harness.clients.list_clients() if n != NO_CLIENT]
+        knowledge = len(db.list_memory())
+        requests = db.count_enquiries(status="received")
+        quiet = {"think", "enquiry-screen", "enquiry-invite", "foundation-test"}
+        recent = [r for r in runs if r["workflow"] not in quiet][:5]
+        recent_rows = "".join(
+            f'<li><a href="{"/queue#d-" + r["id"] if r["status"] in ("waiting_for_approval", "waiting_for_input") else "/inspect/" + r["id"]}">'
+            f'<span class="lead"><span class="glyph">{ui.icon("folder")}</span><span><b>{escape(_kind(r["workflow"]))}'
+            f'{" for " + escape(r["client"]) if r["client"] != NO_CLIENT else ""}</b>'
+            f'<small>{escape(_when(r["updated_at"] or r["created_at"]))}</small></span></span>'
+            f'<span class="end"><span class="s-{escape(r["status"])}">{escape(STATUS_WORDS.get(r["status"], r["status"]))}</span>'
+            f'{ui.icon("chevron")}</span></a></li>'
+            for r in recent
+        )
+        starters = "".join(f'<button type="button" data-say="{escape(t)}">{escape(t)}</button>' for t in (
+            "Plan my week", "Challenge this campaign idea", "Summarise a document", "Draft a client update"))
+        return render("My Studio", "home", f"""
+<div class="studio-head">
+  <div><p class="eyebrow">My private workspace</p>
+    <h1>Ask Ijeoma<span class="accent-dot">.</span></h1>
+    <p class="lede">Orchestrate your agents, manage your work and grow your knowledge.</p></div>
+  <a class="button view-clients" href="/enquiries">View client work {ui.icon("arrow")}</a>
+</div>
+{_cap_banner()}
+<form class="studio-command" method="post" action="/think" enctype="multipart/form-data" id="studio-command" data-state="ready" novalidate>
+  <span class="spark-mark" aria-hidden="true">{ui.icon("spark")}</span>
+  <label class="visually-hidden" for="studio-q">Command my studio</label>
+  <textarea id="studio-q" name="question" rows="1" maxlength="8000" required
+    placeholder="Command my studio: create, review, refine or build"></textarea>
+  <label class="clip" title="Attach files">{ui.icon("clip")}<span class="visually-hidden">Attach files</span>
+    <input type="file" name="files" multiple accept="{",".join(think.READABLE)}"/></label>
+  <button class="approve send" aria-label="Send to Ijeoma">{ui.icon("arrow")}</button>
+</form>
+<ul class="studio-picked" aria-live="polite"></ul>
+<div class="studio-starters" aria-label="Ideas to start with">{starters}</div>
+<div class="studio-grid">
+  <section class="card">
+    <div class="linkrow"><h2>Agent activity</h2><a href="/inspect">All runs {ui.icon("arrow")}</a></div>
+    <ul class="rows agents">{"".join(_agent_row(*a, runs) for a in AGENTS)}</ul>
+  </section>
+  <section class="card" data-state="{"waiting" if decisions else "clear"}">
+    <div class="linkrow"><h2>Decision queue {f'<span class="count" aria-label="{len(decisions)} waiting">{len(decisions)}</span>' if decisions else ""}</h2>
+      <a href="/queue">View all {ui.icon("arrow")}</a></div>
+    {f'<ul class="rows">{queue_rows}</ul>' if queue_rows else '<p class="quiet">Nothing waits for your decision.</p>'}
+  </section>
+</div>
+<div class="studio-stats">
+  <a class="card stat" href="/files"><span class="glyph">{ui.icon("folder")}</span><b>Projects</b>
+    <strong>{len(projects)}</strong><small>Client workstreams</small>{ui.icon("chevron")}</a>
+  <a class="card stat" href="/library"><span class="glyph">{ui.icon("memory")}</span><b>Knowledge</b>
+    <strong>{knowledge}</strong><small>Notes and decisions kept</small>{ui.icon("chevron")}</a>
+  <a class="card stat" href="/enquiries"><span class="glyph">{ui.icon("mail")}</span><b>Client requests</b>
+    <strong>{requests}</strong><small>Waiting for your answer</small>{ui.icon("chevron")}</a>
+</div>
+<section class="card">
+  <div class="linkrow"><h2>Your recent work</h2><a href="/work">All work {ui.icon("arrow")}</a></div>
+  {f'<ul class="rows">{recent_rows}</ul>' if recent_rows else '<p class="quiet">Work the agents do for you shows here.</p>'}
+</section>
+""", script=STUDIO_SCRIPT)
+
+    @app.get("/overview", response_class=HTMLResponse)
+    def overview() -> str:
         icon = ui.icon
         hour = datetime.now(_zone()).hour
         part = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
@@ -1744,7 +1895,7 @@ def create_app(settings: Settings | None = None, gateway: ModelGateway | None = 
             for s in signals[:4]
         )
         connected = engine.harness.mail is not None
-        return render("Home", "home", f"""
+        return render("Overview", "overview", f"""
 <h1>Good {part}, {escape(settings.owner_name)}.</h1>
 <p class="lede">Here's what matters today.</p>
 {_cap_banner()}

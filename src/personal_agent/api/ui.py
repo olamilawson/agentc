@@ -526,6 +526,150 @@ td { font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: no-preference) {
   button, .rail a, .metric, .hero, .rows a { transition: background-color .15s ease-out, color .15s ease-out, box-shadow .15s ease-out; }
 }
+""" + """
+/* === Ijeoma.Pro: the owner's reference boards (Ijeoma.Pro-executive.zip, 15 Nov 2026) ===
+   One layer over everything above: a warm white canvas, the orange-to-brown sidebar, soft cards
+   with a 19px radius, a bold sans for headings, one orange accent. Measured pairs:
+     sidebar text #fff0e7 on #b83d07 (its lightest point) 8.0:1; its labels #ffd8c1 6.3:1
+     the current item, white on #c94a10, 4.7:1 (the boards' #ef771d was 2.9:1, so it sits darker)
+     links and accents #bd3505 on #fffaf7 5.2:1; secondary text #64636c on #fffaf7 5.7:1 */
+:root {
+  --canvas: #fffaf7; --card: #fffdfc; --well: #fff6f1; --subtle: #fbefe8; --line: #f3ebe6; --line-strong: #eee4df; --edge: #8a7e78;
+  --ink: #481c13; --text: #3e2b25; --muted: #64636c; --strong: #2e1e18; --slate-ink: #4d4148;
+  --purple: #e2560e; --purple-ink: #9e2c03; --purple-tint: #fff1e8; --purple-line: #fbd9c4; --purple-edge: #f5a46b;
+  --blue: #bd3505; --blue-ink: #9e2c03; --blue-tint: #fff1e8;
+  --btn: #bd3505; --btn-hover: #9e2c03; --btn-text: #ffffff;
+  --hero: linear-gradient(100deg, #fff1e8, #fff8f3 60%, #fffdfc); --evaluation: linear-gradient(100deg, #fff1e8, #fff8f3);
+  --rail: linear-gradient(160deg, #b83d07 0%, #a22d03 40%, #5f1c09 100%); --rail-text: #ffd8c1; --rail-line: rgba(255, 255, 255, .18);
+  --rail-hover: rgba(255, 255, 255, .1); --rail-active: #c94a10;
+  --serif: var(--sans);
+  --shadow: 0 6px 15px rgba(104, 32, 12, .04);
+}
+:root[data-theme="dark"] {
+  --canvas: #16100d; --card: #1f1714; --well: #1a1310; --subtle: #2a1f1a; --line: #2d221c; --line-strong: #3d2e26; --edge: #a08f86;
+  --ink: #fff3ec; --text: #ecdcd3; --muted: #bcaba2; --strong: #fff3ec; --slate-ink: #ecdcd3;
+  --purple: #f5793a; --purple-ink: #ffc4a0; --purple-tint: #33190d; --purple-line: #5a2a12; --purple-edge: #a0471b;
+  --blue: #ffb085; --blue-ink: #ffc4a0; --blue-tint: #33190d;
+  --btn: #e2560e; --btn-hover: #c94a10; --btn-text: #1a0903;
+  --hero: linear-gradient(100deg, #33190d, #22150f 60%, #1f1714); --evaluation: linear-gradient(100deg, #33190d, #22150f);
+  --rail: linear-gradient(160deg, #6d2306 0%, #4a1804 45%, #1f0c05 100%);
+}
+body { background: var(--canvas); }
+:root:not([data-theme="dark"]) body { background: linear-gradient(115deg, #fffdfb, #fff7f2) fixed; }
+::selection { background: #fbd9c4; color: #481c13; }
+:focus-visible { outline-color: #e2560e; }
+
+/* the sidebar */
+.rail { background: var(--rail); border-right: 0; color: #fff0e7; width: 236px; }
+.rail :focus-visible { outline-color: #fff0e7; }
+.brand { padding: 26px 22px 6px; color: #fff; text-transform: none; letter-spacing: -.02em; font-size: 20px; font-weight: 700; }
+.brand .mark.ij-mark { width: 38px; height: 40px; border-radius: 11px; background: #fff7ec; color: #542b1c; display: flex; align-items: center;
+  justify-content: center; font: 800 24px/1 var(--sans); letter-spacing: -.12em; padding-right: 3px; box-shadow: 0 6px 16px rgba(40, 10, 2, .3); }
+.brand .mark.ij-mark i { font-style: normal; color: #ec7638; } .brand span i { font-style: normal; }
+.rail a.brand { min-height: 0; width: auto; padding: 26px 22px 14px; gap: 12px; font: 700 20px/1.1 var(--sans); letter-spacing: -.02em;
+  color: #fff; background: none; box-shadow: none; border-radius: 0; }
+.rail a.brand:hover { background: none; }
+.brand small { display: block; color: #ffd8c1; font-size: 9px; font-weight: 600; letter-spacing: .2em; text-transform: uppercase; margin-top: 6px; }
+.rail a, .rail button { color: #fff0e7; border-radius: 11px; min-height: 42px; }
+.rail a:hover, .rail button:hover { background: rgba(255, 255, 255, .1); color: #fff; }
+.rail a[aria-current="page"] { background: linear-gradient(100deg, #c94a10, #b2400c); color: #fff; font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 4px 12px rgba(60, 14, 2, .25); }
+.rail h2 { color: #ffd8c1; }
+.streams a { color: #fff0e7; }
+.count { background: #fff0e7; color: #9e2c03; font-weight: 700; }
+.count.quiet-count, .rail a[aria-current="page"] .quiet-count { background: rgba(255, 255, 255, .2); color: #fff; }
+.rail-foot { border-top-color: rgba(255, 255, 255, .18); }
+.page { margin-left: 236px; }
+
+/* the page */
+.topbar { padding: 20px 40px 8px; }
+main { padding: 8px 40px 64px; }
+h1 { font: 700 40px/1.08 var(--sans); letter-spacing: -.035em; color: var(--ink); }
+h2 { font: 600 19px/1.3 var(--sans); letter-spacing: -.02em; color: var(--strong); }
+.card, .metric, .strip a { border-radius: 19px; border-color: var(--line-strong); background: var(--card); box-shadow: var(--shadow); }
+.approve { background: linear-gradient(140deg, #ff982d 0%, #f55100 44%, #a92500 100%); border-color: #c8410a; color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); }
+.approve:hover { background: linear-gradient(140deg, #f27a19, #b92a00); }
+:root[data-theme="dark"] .approve { color: #fff; }
+button, .button { border-radius: 12px; }
+select, input[type="text"], input[type="email"], input[type="tel"], input[type="number"], input[type="password"], input[type="datetime-local"], textarea {
+  border-color: #cdbfb8; border-radius: 12px; }
+.eyebrow { color: #bd3505; letter-spacing: .14em; }
+:root[data-theme="dark"] .eyebrow { color: #ffb085; }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* My Studio: "Ask Ijeoma." */
+.studio-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-top: 8px; }
+.studio-head h1 { font-size: 46px; margin: 0 0 8px; }
+.studio-head .lede { margin-bottom: 20px; }
+.accent-dot { color: #e2560e; }
+.view-clients { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; border-radius: 999px; padding: 0 20px;
+  background: var(--card); border-color: var(--line-strong); color: var(--ink); line-height: 44px; flex: none; }
+.studio-command { display: flex; align-items: flex-end; gap: 10px; margin: 0; padding: 8px 10px 8px 20px; background: var(--card);
+  border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: 0 5px 16px rgba(89, 29, 14, .05); }
+.studio-command:focus-within { border-color: #f5a46b; box-shadow: 0 5px 20px rgba(226, 86, 14, .12); }
+.studio-command .spark-mark { color: #ff7516; display: flex; align-self: center; }
+.studio-command .spark-mark svg.i { width: 20px; height: 20px; }
+.studio-command textarea { flex: 1; min-height: 44px; max-height: 220px; border: 0; padding: 11px 0; background: none; resize: none;
+  font: 500 15px/1.45 var(--sans); color: var(--ink); outline: none; overflow-x: hidden; }
+.studio-command textarea::placeholder { color: #746c70; }
+.studio-command .clip { position: relative; width: 44px; height: 44px; border-radius: 12px; display: inline-flex; align-items: center;
+  justify-content: center; color: var(--text); cursor: pointer; flex: none; }
+.studio-command .clip:hover { background: var(--subtle); }
+.studio-command .clip:focus-within { outline: 2px solid #e2560e; outline-offset: 2px; }
+.studio-command .clip input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; min-height: 0; padding: 0; }
+.studio-command .send { width: 46px; height: 44px; min-height: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.studio-command .send svg.i { width: 18px; height: 18px; }
+.studio-picked { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; padding: 0; }
+.studio-picked:empty { display: none; }
+.studio-picked li { padding: 4px 10px; border-radius: 999px; background: var(--subtle); font-size: 12px; }
+.studio-picked li.error { background: none; color: #b42318; font-weight: 600; padding-left: 0; }
+:root[data-theme="dark"] .studio-picked li.error { color: #fca5a5; }
+.studio-starters { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 24px; }
+.studio-starters button { min-height: 36px; padding: 0 14px; border-radius: 999px; font: 600 12px var(--sans); background: transparent;
+  border-color: var(--line-strong); color: var(--text); box-shadow: none; }
+.studio-starters button:hover { background: var(--purple-tint); border-color: #f5a46b; }
+.studio-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 20px; margin-bottom: 20px; align-items: start; }
+.studio-grid .card, .studio-stats .card { margin: 0; }
+.studio-grid h2, .studio-stats b { display: flex; align-items: center; gap: 10px; }
+.rows .glyph, .stat .glyph { width: 38px; height: 38px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--purple-tint); color: #c2410c; flex: none; }
+:root[data-theme="dark"] .rows .glyph, :root[data-theme="dark"] .stat .glyph { color: #ffb085; }
+.rows .glyph svg.i, .stat .glyph svg.i { width: 18px; height: 18px; }
+.rows.agents li > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; }
+.rows.agents li[data-state="not_set_up"] b { color: var(--muted); }
+.studio-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px; }
+.stat { display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: "g name go" "n n go" "s s go"; gap: 4px 12px; align-items: center;
+  text-decoration: none; color: var(--text); padding: 20px; }
+.stat .glyph { grid-area: g; } .stat b { grid-area: name; color: var(--ink); font-size: 15px; }
+.stat strong { grid-area: n; font: 700 34px/1.1 var(--sans); color: var(--ink); margin-top: 8px; font-variant-numeric: tabular-nums; }
+.stat small { grid-area: s; color: var(--muted); font-size: 12px; } .stat > svg.i { grid-area: go; color: var(--muted); }
+.stat:hover { border-color: #f5a46b; }
+@media (max-width: 1100px) { .studio-grid { grid-template-columns: 1fr; } }
+@media (max-width: 860px) {
+  .studio-head { flex-direction: column; } .studio-head h1 { font-size: 36px; }
+  .studio-stats { grid-template-columns: 1fr; gap: 12px; }
+  .studio-command { padding-left: 14px; }
+}
+.rail-menu { display: contents; }
+.rail-head { display: flex; align-items: center; justify-content: space-between; }
+.rail .menu-toggle { display: none; }
+.studio-command textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 860px) {
+  .rail { width: auto; }
+  .rail-head { padding-right: 12px; }
+  .rail a.brand { padding: 14px 16px; }
+  .rail .menu-toggle { display: inline-flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; padding: 0;
+    border-radius: 12px; background: rgba(255, 255, 255, .12); border: 1px solid rgba(255, 255, 255, .25); color: #fff; box-shadow: none; }
+  .rail .menu-toggle[hidden] { display: none; }
+  .menu-toggle svg.i { width: 20px; height: 20px; }
+  .rail[data-state="open"] .open-icon, .rail[data-state="closed"] .close-icon { display: none; }
+  .rail-menu { display: block; }
+  .rail[data-state="closed"] .rail-menu { display: none; }
+  .page { margin: 0; }
+  .topbar, main { padding-left: 16px; padding-right: 16px; }
+  h1 { font-size: 30px; }
+}
 """
 
 # Outline icons, 24-unit grid, drawn for this app in the style of the screens' icon set.
@@ -552,6 +696,7 @@ _ICONS = {
     "creative": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/><circle cx="9" cy="9" r="1.5"/>',
     "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
     "x": '<path d="M6 6l12 12M18 6 6 18"/>',
+    "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
     "check": '<path d="m5 12 5 5 9-10"/>',
     "note": '<path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/>',
     "today": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -592,6 +737,16 @@ THEME_SCRIPT = """<script>
       history.back();
     }
   });
+})();
+(function () {
+  var rail = document.getElementById('rail'), toggle = rail && rail.querySelector('.menu-toggle');
+  if (!toggle) return;
+  var phone = window.matchMedia('(max-width: 860px)');
+  function set(open) { rail.dataset.state = open ? 'open' : 'closed'; toggle.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+  toggle.hidden = false;
+  set(!phone.matches);
+  phone.addEventListener('change', function () { set(!phone.matches); });
+  toggle.addEventListener('click', function () { set(rail.dataset.state !== 'open'); });
 })();
 (function () {
   var button = document.getElementById('theme'), root = document.documentElement;
@@ -648,7 +803,8 @@ def stream_badge(name: str) -> str:
 
 
 SCREENS = [
-    ("home", "/", "Home", "home"),
+    ("home", "/", "My Studio", "home"),
+    ("overview", "/overview", "Overview", "layers"),
     ("today", "/today", "Today", "today"),
     ("think", "/think", "Think", "think"),
     ("work", "/work", "Work", "work"),
@@ -694,8 +850,14 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
 {ICON_LINKS}
 <style>{CSS}</style>{THEME_HEAD}</head>
 <body>
-<header class="rail">
-  <div class="brand"><span class="mark">{MARK}</span><span>{escape(brand)}.<small>Executive intelligence</small></span></div>
+<header class="rail" id="rail" data-state="open">
+  <div class="rail-head">
+  <a class="brand" href="/" aria-label="{escape(brand)}, home"><span class="mark ij-mark" aria-hidden="true">ij<i>.</i></span>
+    <span>{escape(brand).replace(".", '<i>.</i>', 1)}<small>Admin workspace</small></span></a>
+  <button type="button" class="menu-toggle" aria-controls="rail-menu" aria-expanded="true" hidden>
+    <span class="open-icon">{icon("menu")}</span><span class="close-icon">{icon("x")}</span><span class="visually-hidden">Menu</span></button>
+  </div>
+  <div class="rail-menu" id="rail-menu">
   <div class="rail-scroll">
     <nav aria-label="Screens">{"".join(link(*screen) for screen in SCREENS)}</nav>
     <h2>Workstreams <a href="/files" aria-label="Manage workstreams">{icon("plus")}</a></h2>
@@ -704,6 +866,7 @@ def page(title: str, active: str, body: str, *, brand: str, waiting: int = 0, si
   <div class="rail-foot">
     {"".join(link(*screen) for screen in FOOT)}
     {sign_out}
+  </div>
   </div>
 </header>
 <div class="page">

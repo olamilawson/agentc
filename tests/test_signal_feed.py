@@ -107,7 +107,7 @@ def test_new_headlines_arrive_once_are_sorted_as_data_and_wait_for_the_owner(set
     assert 'href="https://news.example/a1" rel="noopener noreferrer"' in page and "a headline from a feed, not checked" in page
     assert "The agent reads your 1 source each hour" in page
     assert signal_scan.collect(engine.db, "AltBank")["new"] == 0  # the same headlines are not brought in twice
-    assert "1 new from your sources" not in client.get("/").text and "2 new from your sources" in client.get("/").text
+    assert "1 new from your sources" not in client.get("/overview").text and "2 new from your sources" in client.get("/overview").text
     assert "Sort" not in client.get("/work").text.split("board")[1]  # a scan is not an item on the board
 
 

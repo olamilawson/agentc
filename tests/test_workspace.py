@@ -81,13 +81,13 @@ def test_a_decision_on_a_task_is_made_in_review_and_kept_with_its_reason(setting
     assert "1 decision pending" in review and f'<a href="#d-t{task}" data-open="d-t{task}">' in review
     assert "Why this decision?" in review and "Agency has submitted 3 routes" in review
     assert "Approve campaign direction" not in client.get("/queue?ws=MBN").text
-    assert "<b>1</b><span>Decision</span>" in client.get("/").text
+    assert "<b>1</b><span>Decision</span>" in client.get("/overview").text
 
     done = client.post(f"/tasks/{task}/decision", data={"decision": "changes", "reason": "Route A is strong; sharpen the offer."})
     assert done.status_code == 303 and done.headers["location"].startswith("/queue?done=")
     confirmed = client.get(done.headers["location"]).text
     assert "No item needs your decision." in confirmed and "Changes requested · recorded" in confirmed
-    home = client.get("/").text  # decided today: still in view, struck through
+    home = client.get("/overview").text  # decided today: still in view, struck through
     assert '<b class="struck">Approve campaign direction</b>' in home
     memory = client.get("/library").text
     assert "Route A is strong; sharpen the offer." in memory and "Changes requested" in memory
@@ -147,7 +147,7 @@ def test_the_watchlist_holds_only_what_the_owner_adds(settings):
     assert "CBN circular on fees" in client.get("/intelligence?kind=regulation").text
     assert "CBN circular on fees" not in client.get("/intelligence?kind=reputation").text
     assert "CBN circular on fees" not in client.get("/intelligence?ws=MBN").text
-    home = client.get("/").text
+    home = client.get("/overview").text
     assert "CBN circular on fees" in home and "<b>0</b><span>Reputation signals</span>" in home
     assert client.post("/signals", data={"workstream": "AltBank", "kind": "rumour", "title": "x"}).status_code == 400
 

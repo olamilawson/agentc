@@ -133,7 +133,7 @@ class Settings(BaseModel):
     # Minutes an approved agency brief is held before it is sent; the owner can recall it in that time.
     dispatch_hold_minutes: int = 15
     # The name shown in the rail and the page titles.
-    brand_name: str = "Chidimma OS"
+    brand_name: str = "Ijeoma.Pro"
     # The name the home screen greets.
     owner_name: str = "Chidimma"
     # Owner sign-in (see auth.py). Email, password hash and session secret all
@@ -191,7 +191,7 @@ def load_settings() -> Settings:
             k: v for k, v in from_yaml("PERSONAL_AGENT_ENQUIRIES", "enquiries.yaml").items() if v is not None
         }),
         public_url=env("PERSONAL_AGENT_PUBLIC_URL") or None,
-        brand_name=env("PERSONAL_AGENT_NAME") or "Chidimma OS",
+        brand_name=env("PERSONAL_AGENT_NAME") or "Ijeoma.Pro",
         owner_name=env("PERSONAL_AGENT_OWNER_NAME") or "Chidimma",
         graph_tenant_id=env("MS_GRAPH_TENANT_ID") or None,
         graph_client_id=env("MS_GRAPH_CLIENT_ID") or None,

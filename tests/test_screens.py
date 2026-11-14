@@ -185,7 +185,7 @@ def test_a_mode_changes_what_the_agent_is_asked_for(settings):
 
 def test_the_command_bar_is_on_the_workspace_screens_and_take_action_fills_a_new_task(settings):
     client = _client(settings)
-    for path in ("/", "/today", "/work", "/queue", "/intelligence", "/library", "/core"):
+    for path in ("/overview", "/today", "/work", "/queue", "/intelligence", "/library", "/core"):
         page = client.get(path).text
         assert 'data-mode="action"' in page and page.count('id="ask-goal"') == 1, path
     assert "details.add input[name=\"title\"]" in client.get("/today").text  # the script that fills the task
