@@ -557,7 +557,8 @@ td { font-variant-numeric: tabular-nums; }
   --rail: linear-gradient(160deg, #6d2306 0%, #4a1804 45%, #1f0c05 100%);
 }
 body { background: var(--canvas); }
-:root:not([data-theme="dark"]) body { background: linear-gradient(115deg, #fffdfb, #fff7f2) fixed; }
+/* Not on the public pages: they keep their own orange background, which their white text needs. */
+:root:not([data-theme="dark"]) body:not(.public) { background: linear-gradient(115deg, #fffdfb, #fff7f2) fixed; }
 ::selection { background: #fbd9c4; color: #481c13; }
 :focus-visible { outline-color: #e2560e; }
 

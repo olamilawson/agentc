@@ -41,3 +41,15 @@ def test_a_running_strategist_shows_as_working(settings):
 def test_the_old_board_is_kept_as_overview(settings):
     client = _client(settings)
     assert 'href="/overview"' in client.get("/").text and "Top priorities" in client.get("/overview").text
+
+
+def test_the_owner_look_leaves_the_public_pages_their_own_background():
+    """A light background on every body once hid the public page's white headline (15 Nov 2026)."""
+    import re
+
+    from personal_agent.api import ui
+
+    for selector in re.findall(r"([^{}]*)\{[^{}]*background:[^{}]*\}", ui.CSS):
+        s = " ".join(selector.split())
+        if re.search(r"(^|[\s>+~,])body(?![\w.\-:])", s):  # a rule on every body, not body.public
+            assert s.endswith("body:not(.public)") or s == "body", s
